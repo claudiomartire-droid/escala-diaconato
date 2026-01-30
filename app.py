@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V4.5", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V4.6", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 4.5)")
-st.info("🚀 Versão estabilizada: Correção de erro no editor de férias e detecção automática de CSV.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 4.6)")
+st.info("💡 Otimização: O sistema agora prioriza quem já está escalado no dia para realizar a Abertura.")
 
 def obter_primeiro_domingo(ano, mes):
     d = date(ano, mes, 1)
@@ -19,7 +19,6 @@ st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
 
 if arquivo_carregado:
-    # Leitura com tratamento de codificação
     try:
         df_membros = pd.read_csv(arquivo_carregado, sep=None, engine='python', encoding='iso-8859-1')
     except Exception:
@@ -57,18 +56,9 @@ if arquivo_carregado:
     dias_culto = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes))
 
-    st.sidebar.header("3. Regras Fixas (CSV)")
-    with st.sidebar.expander("Visualizar Regras do Arquivo"):
-        st.write("**Duplas:**", pd.DataFrame(regras_duplas_csv) if regras_duplas_csv else "Nenhuma")
-        st.write("**Funções:**", pd.DataFrame(regras_funcao_csv) if regras_funcao_csv else "Nenhuma")
-
-    # --- 3. TABELA DE FÉRIAS (CORREÇÃO DE ERRO DE API) ---
-    st.sidebar.header("4. Férias / Ausências")
-    
-    # Criamos um DataFrame inicial limpo para o editor
+    # --- 3. TABELA DE FÉRIAS ---
+    st.sidebar.header("3. Férias / Ausências")
     df_vazio_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
-    
-    # O editor agora não tenta salvar no session_state na declaração (evita conflito de tipo)
     ausencias_editadas = st.sidebar.data_editor(
         df_vazio_ausencias,
         column_config={
@@ -76,8 +66,7 @@ if arquivo_carregado:
             "Início": st.column_config.DateColumn(required=True), 
             "Fim": st.column_config.DateColumn(required=True)
         },
-        num_rows="dynamic", 
-        key="editor_ausencias_v45"
+        num_rows="dynamic", key="editor_ausencias_v46"
     )
 
     if st.sidebar.button("Gerar Escala Atualizada"):
@@ -99,13 +88,11 @@ if arquivo_carregado:
                 candidatos_dia = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 candidatos_dia = candidatos_dia[~candidatos_dia['Nome'].isin(ultimos_escalados)]
 
-                # Filtro de Ausências (Lendo do que foi editado na tela)
+                # Filtro de Ausências
                 for _, aus in ausencias_editadas.iterrows():
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
                         try:
-                            d_ini = pd.to_datetime(aus['Início']).date()
-                            d_fim = pd.to_datetime(aus['Fim']).date()
-                            if d_ini <= data_atual <= d_fim:
+                            if pd.to_datetime(aus['Início']).date() <= data_atual <= pd.to_datetime(aus['Fim']).date():
                                 candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
                         except: continue
 
@@ -114,17 +101,15 @@ if arquivo_carregado:
 
                 vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"] if nome_col_dia == "Domingo" else ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
+                # --- ESCALA DOS POSTOS PRINCIPAIS ---
                 for vaga in vagas:
                     candidatos = candidatos_dia[~candidatos_dia['Nome'].isin(escalados_no_dia.keys())]
-                    
                     if vaga == "Portaria 1 (Rua)": candidatos = candidatos[candidatos['Sexo'] == 'M']
-
-                    # Regra de Duplas
+                    
                     for regra in regras_duplas_csv:
                         if regra['Pessoa A'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != regra['Pessoa B']]
                         if regra['Pessoa B'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != regra['Pessoa A']]
 
-                    # Restrição de Função
                     for rest in regras_funcao_csv:
                         if rest['Membro'] in candidatos['Nome'].values and rest['Função Proibida'] in vaga:
                             candidatos = candidatos[candidatos['Nome'] != rest['Membro']]
@@ -133,7 +118,6 @@ if arquivo_carregado:
                     elif "Frente Templo (F)" in vaga: candidatos = candidatos[candidatos['Sexo'] == 'F']
                     
                     candidatos = candidatos.sort_values(by='escalas_no_mes')
-
                     if not candidatos.empty:
                         escolhido = candidatos.iloc[0]
                         escalados_no_dia[escolhido['Nome']] = escolhido
@@ -142,17 +126,35 @@ if arquivo_carregado:
                     else:
                         dia_escala[vaga] = "FALTA PESSOAL"
 
-                ultimos_escalados = list(escalados_no_dia.keys())
+                # --- LÓGICA DE ABERTURA OTIMIZADA ---
+                # 1. Filtra quem PODE fazer abertura (Abertura="SIM" e sem restrição de função)
+                membros_aptos_abertura = candidatos_dia[candidatos_dia['Abertura'] == "SIM"].copy()
+                restritos_abertura = [r['Membro'] for r in regras_funcao_csv if r['Função Proibida'] == "Abertura"]
+                membros_aptos_abertura = membros_aptos_abertura[~membros_aptos_abertura['Nome'].isin(restritos_abertura)]
+                
+                # 2. Tenta priorizar quem JÁ ESTÁ escalado no dia (exceto quem está na Portaria 1 Rua por segurança)
+                ja_escalados_aptos = [n for n in escalados_no_dia.keys() if n in membros_aptos_abertura['Nome'].values and n != dia_escala.get("Portaria 1 (Rua)")]
+                
+                if ja_escalados_aptos:
+                    # Se houver alguém já lá, escolhe um deles
+                    dia_escala["Abertura"] = ja_escalados_aptos[0]
+                else:
+                    # Se ninguém escalado pode abrir, busca nos candidatos do dia que sobraram
+                    sobra_abertura = membros_aptos_abertura[~membros_aptos_abertura['Nome'].isin(escalados_no_dia.keys())]
+                    if not sobra_abertura.empty:
+                        escolhido_ab = sobra_abertura.sort_values(by='escalas_no_mes').iloc[0]
+                        dia_escala["Abertura"] = escolhido_ab['Nome']
+                        # Opcional: Contar como escala extra se ele for SÓ para abrir? 
+                        # Aqui tratamos como "---" se não houver ninguém disponível.
+                    else:
+                        dia_escala["Abertura"] = "---"
 
-                # Santa Ceia e Abertura
+                # Santa Ceia
                 if data_atual == data_ceia:
-                    aptos = [m for m in escalados_no_dia.keys() if m != dia_escala.get("Portaria 1 (Rua)")]
-                    dia_escala["Servir Santa Ceia"] = ", ".join([m for m in aptos if escalados_no_dia[m]['Sexo'] == 'M'][:2] + [m for m in aptos if escalados_no_dia[m]['Sexo'] == 'F'][:2])
+                    aptos_ceia = [m for m in escalados_no_dia.keys() if m != dia_escala.get("Portaria 1 (Rua)")]
+                    dia_escala["Servir Santa Ceia"] = ", ".join([m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'M'][:2] + [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'F'][:2])
                 
-                c_ab = candidatos_dia[(candidatos_dia['Abertura'] == "SIM") & (candidatos_dia['Nome'] != dia_escala.get("Portaria 1 (Rua)"))]
-                ja_no_t = [n for n in escalados_no_dia.keys() if n in c_ab['Nome'].values]
-                dia_escala["Abertura"] = ja_no_t[0] if ja_no_t else (c_ab[~c_ab['Nome'].isin(escalados_no_dia.keys())].iloc[0]['Nome'] if not c_ab[~c_ab['Nome'].isin(escalados_no_dia.keys())].empty else "---")
-                
+                ultimos_escalados = list(escalados_no_dia.keys())
                 escala_final.append(dia_escala)
 
         st.subheader(f"Escala Gerada")
@@ -163,4 +165,4 @@ if arquivo_carregado:
             pd.DataFrame(escala_final).to_excel(writer, index=False, sheet_name='Escala')
         st.download_button(label="📥 Baixar Escala em Excel", data=output.getvalue(), file_name=f"escala_diaconato.xlsx")
 else:
-    st.info("Aguardando upload do arquivo membros_master.csv para começar.")
+    st.info("Aguardando upload do arquivo membros_master.csv.")
