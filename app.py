@@ -4,10 +4,24 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V4.9", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.0", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 4.9)")
-st.info("🔍 Conferência: As tabelas de Duplas e Restrições lidas do seu CSV estão visíveis abaixo.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.0)")
+st.info("📅 Inteligência de Datas: O sistema agora sugere automaticamente o mês de planejamento com base no dia atual.")
+
+# --- LÓGICA DE DATA PADRÃO (REGRA DA 1ª SEMANA) ---
+hoje = datetime.now()
+if hoje.day <= 7:
+    mes_padrao = hoje.month
+    ano_padrao = hoje.year
+else:
+    # Se for dezembro, o próximo mês é janeiro do ano seguinte
+    if hoje.month == 12:
+        mes_padrao = 1
+        ano_padrao = hoje.year + 1
+    else:
+        mes_padrao = hoje.month + 1
+        ano_padrao = hoje.year
 
 def obter_primeiro_domingo(ano, mes):
     d = date(ano, mes, 1)
@@ -31,7 +45,7 @@ if arquivo_carregado:
 
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
-    # --- PROCESSAMENTO DE REGRAS (PARA EXIBIÇÃO E MOTOR) ---
+    # Processamento de Regras para Conferência
     regras_duplas_csv = []
     if 'Nao_Escalar_Com' in df_membros.columns:
         for _, row in df_membros[df_membros['Nao_Escalar_Com'].notna()].iterrows():
@@ -47,26 +61,16 @@ if arquivo_carregado:
                 if func and func.lower() != 'nan':
                     regras_funcao_csv.append({"Membro": row['Nome'], "Função Proibida": func})
 
-    # --- EXIBIÇÃO DAS REGRAS LIDAS (ÁREA PRINCIPAL) ---
     st.subheader("📋 Conferência de Regras do CSV")
     tab1, tab2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
-    
-    with tab1:
-        if regras_duplas_csv:
-            st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True)
-        else:
-            st.write("Nenhuma regra de dupla encontrada no arquivo.")
-            
-    with tab2:
-        if regras_funcao_csv:
-            st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True)
-        else:
-            st.write("Nenhuma restrição de função encontrada no arquivo.")
+    with tab1: st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True) if regras_duplas_csv else st.write("Sem duplas.")
+    with tab2: st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True) if regras_funcao_csv else st.write("Sem restrições.")
 
     # --- 2. INTERFACE LATERAL ---
     st.sidebar.header("2. Configurações")
-    ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=2026)
-    mes = st.sidebar.selectbox("Mês", range(1, 13), index=0, format_func=lambda x: [
+    # Aplica o ano e mês calculados pela regra da primeira semana
+    ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=ano_padrao)
+    mes = st.sidebar.selectbox("Mês", range(1, 13), index=mes_padrao-1, format_func=lambda x: [
         "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
         "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1])
     
@@ -79,10 +83,10 @@ if arquivo_carregado:
         df_vazio_ausencias,
         column_config={
             "Membro": st.column_config.SelectboxColumn(options=nomes_membros, required=True), 
-            "Início": st.column_config.DateColumn(required=True), 
-            "Fim": st.column_config.DateColumn(required=True)
+            "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), 
+            "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")
         },
-        num_rows="dynamic", key="editor_ausencias_v49"
+        num_rows="dynamic", key="editor_ausencias_v50"
     )
 
     # --- 4. MOTOR DE GERAÇÃO ---
@@ -113,12 +117,12 @@ if arquivo_carregado:
                                 candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
                         except: continue
 
-                dia_escala = {"Data": data.strftime('%d/%m (%a)')}
+                # DATA FORMATADA EM DD/MM/AAAA
+                dia_escala = {"Data": data.strftime('%d/%m/%Y (%a)')}
                 escalados_no_dia = {} 
 
                 vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"] if nome_col_dia == "Domingo" else ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
-                # --- ESCALA DOS POSTOS ---
                 for vaga in vagas:
                     candidatos = candidatos_dia[~candidatos_dia['Nome'].isin(escalados_no_dia.keys())]
                     if vaga == "Portaria 1 (Rua)": candidatos = candidatos[candidatos['Sexo'] == 'M']
@@ -172,11 +176,12 @@ if arquivo_carregado:
                 escala_final.append(dia_escala)
 
         st.subheader("🗓️ Escala Gerada")
-        st.dataframe(pd.DataFrame(escala_final), use_container_width=True)
+        df_final_view = pd.DataFrame(escala_final)
+        st.dataframe(df_final_view, use_container_width=True)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            pd.DataFrame(escala_final).to_excel(writer, index=False, sheet_name='Escala')
-        st.download_button(label="📥 Baixar Escala em Excel", data=output.getvalue(), file_name=f"escala_diaconato.xlsx")
+            df_final_view.to_excel(writer, index=False, sheet_name='Escala')
+        st.download_button(label="📥 Baixar Escala em Excel", data=output.getvalue(), file_name=f"escala_diaconato_{mes}_{ano}.xlsx")
 else:
     st.info("Aguardando upload do arquivo membros_master.csv.")
