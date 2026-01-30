@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.3", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.4", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.3)")
-st.info("🔄 Restaurado: Agora você pode excluir datas específicas (ex: sábados sem culto) no menu lateral.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.4)")
+st.success("✅ Erro de interface corrigido. Todas as regras de exclusão e sequência estão ativas.")
 
 # --- LÓGICA DE DATA PADRÃO ---
 hoje = datetime.now()
@@ -52,10 +52,21 @@ if arquivo_carregado:
                 if f and f.lower() != 'nan':
                     regras_funcao.append({"Membro": row['Nome'], "Função Proibida": f})
 
+    # --- CORREÇÃO DO ERRO: ESTRUTURA EXPANDIDA ---
     st.subheader("📋 Conferência de Regras")
-    t1, t2 = st.tabs(["👥 Duplas", "🚫 Funções"])
-    with t1: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True) if regras_duplas else st.info("Sem duplas.")
-    with t2: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True) if regras_funcao else st.info("Sem restrições.")
+    t1, t2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
+    
+    with t1:
+        if regras_duplas:
+            st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
+        else:
+            st.info("Nenhuma regra de dupla impedida encontrada.")
+            
+    with t2:
+        if regras_funcao:
+            st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
+        else:
+            st.info("Nenhuma restrição de função encontrada.")
 
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
@@ -64,10 +75,14 @@ if arquivo_carregado:
     
     dias_semana = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     
-    # --- NOVO/RESTAURADO: DATAS DE EXCLUSÃO ---
+    # Datas de Exclusão
+    data_inicio_mes = date(ano, mes, 1)
+    if mes == 12: data_fim_mes = date(ano + 1, 1, 1) - timedelta(days=1)
+    else: data_fim_mes = date(ano, mes + 1, 1) - timedelta(days=1)
+    
     datas_excluir = st.sidebar.multiselect(
         "Datas para EXCLUIR (Sem Culto)",
-        options=pd.date_range(date(ano, mes, 1), (date(ano, mes, 1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)),
+        options=pd.date_range(data_inicio_mes, data_fim_mes),
         format_func=lambda x: x.strftime('%d/%m/%Y')
     )
     
@@ -82,12 +97,12 @@ if arquivo_carregado:
             "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), 
             "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")
         },
-        num_rows="dynamic", key="editor_v53"
+        num_rows="dynamic", key="editor_v54"
     )
 
     # --- 4. MOTOR ---
     if st.sidebar.button("Gerar Escala Atualizada"):
-        datas_mes = pd.date_range(date(ano, mes, 1), (date(ano, mes, 1) + timedelta(days=32)).replace(day=1) - timedelta(days=1))
+        datas_mes = pd.date_range(data_inicio_mes, data_fim_mes)
         mapa_dias = {2: "Quarta_Feira", 5: "Sabado", 6: "Domingo"}
         escala_final = []
         df_membros['escalas_no_mes'] = 0 
@@ -95,7 +110,6 @@ if arquivo_carregado:
 
         for data in datas_mes:
             data_atual = data.date()
-            # Pula se a data estiver na lista de exclusão
             if any(data_atual == d.date() for d in datas_excluir):
                 continue
                 
@@ -145,7 +159,6 @@ if arquivo_carregado:
                 restritos_ab = [r['Membro'] for r in regras_funcao if r['Função Proibida'] == "Abertura"]
                 aptos_ab = aptos_ab[~aptos_ab['Nome'].isin(restritos_ab)]
                 
-                # Prioridade para quem já está no dia (exceto Rua)
                 ja_no_dia_ab = [n for n in escalados_dia.keys() if n in aptos_ab['Nome'].values and n != dia_escala.get("Portaria 1 (Rua)")]
                 if ja_no_dia_ab:
                     dia_escala["Abertura"] = ja_no_dia_ab[0]
@@ -163,7 +176,9 @@ if arquivo_carregado:
                     h = [m for m in aptos_ceia if escalados_dia[m]['Sexo'] == 'M'][:2]
                     f = [m for m in aptos_ceia if escalados_dia[m]['Sexo'] == 'F'][:2]
                     total = h + f
-                    if len(total) < 4: total = (total + [m for m in aptos_ceia if m not in total])[:4]
+                    if len(total) < 4: 
+                        extras = [m for m in aptos_ceia if m not in total]
+                        total = (total + extras)[:4]
                     dia_escala["Servir Santa Ceia"] = ", ".join(total)
                 
                 membros_ultimo_culto = list(escalados_dia.keys())
@@ -175,6 +190,6 @@ if arquivo_carregado:
         
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as wr: df_res.to_excel(wr, index=False)
-        st.download_button("📥 Baixar Excel", out.getvalue(), f"escala_{mes}_{ano}.xlsx")
+        st.download_button("📥 Baixar Escala em Excel", out.getvalue(), f"escala_{mes}_{ano}.xlsx")
 else:
-    st.info("Aguardando arquivo CSV.")
+    st.info("Aguardando arquivo membros_master.csv.")
