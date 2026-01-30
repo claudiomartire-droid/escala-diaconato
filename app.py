@@ -4,25 +4,22 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V4.4", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V4.5", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 4.4)")
-st.info("✅ Agora as Férias/Ausências permanecem salvas enquanto você ajusta a escala.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 4.5)")
+st.info("🚀 Versão estabilizada: Correção de erro no editor de férias e detecção automática de CSV.")
 
 def obter_primeiro_domingo(ano, mes):
     d = date(ano, mes, 1)
     while d.weekday() != 6: d += timedelta(days=1)
     return d
 
-# --- 1. INICIALIZAÇÃO DO ESTADO (SESSION STATE) ---
-if 'df_ausencias' not in st.session_state:
-    st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
-
-# --- 2. CARGA DE DADOS ---
+# --- 1. CARGA DE DADOS ---
 st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
 
 if arquivo_carregado:
+    # Leitura com tratamento de codificação
     try:
         df_membros = pd.read_csv(arquivo_carregado, sep=None, engine='python', encoding='iso-8859-1')
     except Exception:
@@ -39,7 +36,7 @@ if arquivo_carregado:
     regras_duplas_csv = []
     if 'Nao_Escalar_Com' in df_membros.columns:
         for _, row in df_membros[df_membros['Nao_Escalar_Com'].notna()].iterrows():
-            if str(row['Nao_Escalar_Com']).strip():
+            if str(row['Nao_Escalar_Com']).strip() and str(row['Nao_Escalar_Com']).lower() != 'nan':
                 regras_duplas_csv.append({"Pessoa A": row['Nome'], "Pessoa B": row['Nao_Escalar_Com']})
 
     regras_funcao_csv = []
@@ -50,7 +47,7 @@ if arquivo_carregado:
                 if func and func.lower() != 'nan':
                     regras_funcao_csv.append({"Membro": row['Nome'], "Função Proibida": func})
 
-    # --- 3. INTERFACE ---
+    # --- 2. INTERFACE ---
     st.sidebar.header("2. Configurações")
     ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=2026)
     mes = st.sidebar.selectbox("Mês", range(1, 13), index=0, format_func=lambda x: [
@@ -61,21 +58,26 @@ if arquivo_carregado:
     data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes))
 
     st.sidebar.header("3. Regras Fixas (CSV)")
-    with st.sidebar.expander("Visualizar Duplas e Restrições"):
-        st.write("**Duplas:**", pd.DataFrame(regras_duplas_csv))
-        st.write("**Funções:**", pd.DataFrame(regras_funcao_csv))
+    with st.sidebar.expander("Visualizar Regras do Arquivo"):
+        st.write("**Duplas:**", pd.DataFrame(regras_duplas_csv) if regras_duplas_csv else "Nenhuma")
+        st.write("**Funções:**", pd.DataFrame(regras_funcao_csv) if regras_funcao_csv else "Nenhuma")
 
-    # --- 4. TABELA DE FÉRIAS (AGORA ATUALIZÁVEL E PERSISTENTE) ---
-    st.sidebar.header("4. Férias / Ausências do Mês")
-    st.session_state.df_ausencias = st.sidebar.data_editor(
-        st.session_state.df_ausencias,
+    # --- 3. TABELA DE FÉRIAS (CORREÇÃO DE ERRO DE API) ---
+    st.sidebar.header("4. Férias / Ausências")
+    
+    # Criamos um DataFrame inicial limpo para o editor
+    df_vazio_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
+    
+    # O editor agora não tenta salvar no session_state na declaração (evita conflito de tipo)
+    ausencias_editadas = st.sidebar.data_editor(
+        df_vazio_ausencias,
         column_config={
             "Membro": st.column_config.SelectboxColumn(options=nomes_membros, required=True), 
             "Início": st.column_config.DateColumn(required=True), 
             "Fim": st.column_config.DateColumn(required=True)
         },
         num_rows="dynamic", 
-        key="editor_ausencias"
+        key="editor_ausencias_v45"
     )
 
     if st.sidebar.button("Gerar Escala Atualizada"):
@@ -97,8 +99,8 @@ if arquivo_carregado:
                 candidatos_dia = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 candidatos_dia = candidatos_dia[~candidatos_dia['Nome'].isin(ultimos_escalados)]
 
-                # Filtro de Ausências (Lendo da tabela editável)
-                for _, aus in st.session_state.df_ausencias.iterrows():
+                # Filtro de Ausências (Lendo do que foi editado na tela)
+                for _, aus in ausencias_editadas.iterrows():
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
                         try:
                             d_ini = pd.to_datetime(aus['Início']).date()
@@ -117,12 +119,12 @@ if arquivo_carregado:
                     
                     if vaga == "Portaria 1 (Rua)": candidatos = candidatos[candidatos['Sexo'] == 'M']
 
-                    # Regra de Duplas (CSV)
+                    # Regra de Duplas
                     for regra in regras_duplas_csv:
                         if regra['Pessoa A'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != regra['Pessoa B']]
                         if regra['Pessoa B'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != regra['Pessoa A']]
 
-                    # Restrição de Função (CSV)
+                    # Restrição de Função
                     for rest in regras_funcao_csv:
                         if rest['Membro'] in candidatos['Nome'].values and rest['Função Proibida'] in vaga:
                             candidatos = candidatos[candidatos['Nome'] != rest['Membro']]
