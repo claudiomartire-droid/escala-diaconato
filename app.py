@@ -28,6 +28,9 @@ def obter_primeiro_domingo(ano, mes):
 st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
 
+# NOVO: FUNCIONALIDADE SANTA CEIA - Upload de Histórico
+arquivo_historico = st.sidebar.file_uploader("Opcional: Suba o histórico (Excel/CSV) dos últimos meses", type=["csv", "xlsx"])
+
 if arquivo_carregado:
     try:
         df_membros = pd.read_csv(arquivo_carregado, sep=None, engine='python', encoding='iso-8859-1')
@@ -37,7 +40,30 @@ if arquivo_carregado:
 
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
-    # Conferência de Regras
+    # NOVO: Processamento de Histórico para Equidade
+    contagem_ceia_historico = {nome: 0 for nome in nomes_membros}
+    if arquivo_historico:
+        try:
+            if arquivo_historico.name.endswith('.csv'):
+                df_hist = pd.read_csv(arquivo_historico)
+            else:
+                df_hist = pd.read_excel(arquivo_historico)
+            
+            # Procura por colunas que contenham "Santa Ceia" ou "Ornamentação" no histórico
+            colunas_ceia = [c for c in df_hist.columns if "Santa Ceia" in c or "Ornamentação" in c]
+            for col in colunas_ceia:
+                for lista_nomes in df_hist[col].dropna().astype(str):
+                    for nome in nomes_membros:
+                        if nome in lista_nomes:
+                            contagem_ceia_historico[nome] += 1
+            st.sidebar.success("✅ Histórico carregado para rodízio!")
+        except Exception as e:
+            st.sidebar.error(f"Erro ao ler histórico: {e}")
+
+    # Adiciona o peso do histórico ao DataFrame principal
+    df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia_historico)
+
+    # Conferência de Regras (Mantido original)
     regras_duplas = []
     if 'Nao_Escalar_Com' in df_membros.columns:
         for _, row in df_membros[df_membros['Nao_Escalar_Com'].notna()].iterrows():
@@ -53,15 +79,20 @@ if arquivo_carregado:
                     regras_funcao.append({"Membro": row['Nome'], "Função Proibida": f})
 
     st.subheader("📋 Conferência de Regras")
-    t1, t2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
+    t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Equidade Santa Ceia"])
     with t1:
         if regras_duplas: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
         else: st.info("Sem duplas impeditivas.")
     with t2:
         if regras_funcao: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
         else: st.info("Sem restrições de função.")
+    with t3:
+        # Exibe para o usuário quem está na frente para o rodízio
+        df_equidade = df_membros[['Nome', 'historico_ceia']].sort_values(by='historico_ceia')
+        st.write("Membros com menos atuações em Santa Ceia (Prioridade de Escala):")
+        st.dataframe(df_equidade, use_container_width=True)
 
-    # --- 2. CONFIGURAÇÕES ---
+    # --- 2. CONFIGURAÇÕES (Mantido original) ---
     st.sidebar.header("2. Configurações")
     ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=ano_padrao)
     mes = st.sidebar.selectbox("Mês", range(1, 13), index=mes_padrao-1, format_func=lambda x: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1])
@@ -121,7 +152,12 @@ if arquivo_carregado:
                     if "Frente Templo (M)" in vaga: cand_vaga = cand_vaga[cand_vaga['Sexo'] == 'M']
                     elif "Frente Templo (F)" in vaga: cand_vaga = cand_vaga[cand_vaga['Sexo'] == 'F']
                     
-                    cand_vaga = cand_vaga.sort_values(by='escalas_no_mes')
+                    # NOVO: Se for domingo de ceia, o critério de desempate inclui o histórico de ceia
+                    if data_atual == data_ceia:
+                        cand_vaga = cand_vaga.sort_values(by=['historico_ceia', 'escalas_no_mes'])
+                    else:
+                        cand_vaga = cand_vaga.sort_values(by='escalas_no_mes')
+
                     if not cand_vaga.empty:
                         escolhido = cand_vaga.iloc[0]
                         escalados_dia[escolhido['Nome']] = escolhido
@@ -140,7 +176,9 @@ if arquivo_carregado:
                 else:
                     sobra_ab = aptos_ab[~aptos_ab['Nome'].isin(escalados_dia.keys())]
                     if not sobra_ab.empty:
-                        escolhido_ab = sobra_ab.sort_values(by='escalas_no_mes').iloc[0]
+                        # NOVO: Critério de rodízio na abertura também
+                        sobra_ab = sobra_ab.sort_values(by=['historico_ceia', 'escalas_no_mes'])
+                        escolhido_ab = sobra_ab.iloc[0]
                         dia_escala["Abertura"] = escolhido_ab['Nome']
                         df_membros.loc[df_membros['Nome'] == escolhido_ab['Nome'], 'escalas_no_mes'] += 0.5
                         escalados_dia[escolhido_ab['Nome']] = escolhido_ab
@@ -148,10 +186,11 @@ if arquivo_carregado:
 
                 # --- SANTA CEIA E ORNAMENTAÇÃO ---
                 if data_atual == data_ceia:
-                    # 1. Ornamentação (Pessoas EXCLUSIVAS que tenham SIM no CSV) - Peso 0.5
+                    # 1. Ornamentação - Peso 0.5 + CRITÉRIO DE RODÍZIO HISTÓRICO
                     aptos_orn = candidatos[(candidatos['Ornamentacao'] == "SIM") & (~candidatos['Nome'].isin(escalados_dia.keys()))].copy()
                     if not aptos_orn.empty:
-                        escolhidos_orn = aptos_orn.sort_values(by='escalas_no_mes').head(2)
+                        # NOVO: Aqui o 'historico_ceia' é o primeiro critério para garantir o rodízio
+                        escolhidos_orn = aptos_orn.sort_values(by=['historico_ceia', 'escalas_no_mes']).head(2)
                         dia_escala["Ornamentação"] = ", ".join(escolhidos_orn['Nome'].tolist())
                         for n in escolhidos_orn['Nome']:
                             df_membros.loc[df_membros['Nome'] == n, 'escalas_no_mes'] += 0.5
@@ -162,13 +201,17 @@ if arquivo_carregado:
                     # 2. Servir Santa Ceia (4 pessoas entre as escaladas no dia)
                     aptos_ceia = [m for m in escalados_dia.keys() if m not in [r['Membro'] for r in regras_funcao if r['Função Proibida'] == "Santa Ceia"]]
                     
+                    # NOVO: Ordenar os aptos do dia pelo histórico para escolher quem servirá a ceia
+                    def get_historico(nome): return df_membros.loc[df_membros['Nome'] == nome, 'historico_ceia'].values[0]
                     def get_sex(nome): return df_membros.loc[df_membros['Nome'] == nome, 'Sexo'].values[0]
                     
-                    h = [m for m in aptos_ceia if get_sex(m) == 'M'][:2]
-                    f = [m for m in aptos_ceia if get_sex(m) == 'F'][:2]
+                    aptos_ceia_ordenados = sorted(aptos_ceia, key=lambda x: get_historico(x))
+                    
+                    h = [m for m in aptos_ceia_ordenados if get_sex(m) == 'M'][:2]
+                    f = [m for m in aptos_ceia_ordenados if get_sex(m) == 'F'][:2]
                     total_ceia = (h + f)
                     if len(total_ceia) < 4: 
-                        extras = [m for m in aptos_ceia if m not in total_ceia]
+                        extras = [m for m in aptos_ceia_ordenados if m not in total_ceia]
                         total_ceia = (total_ceia + extras)[:4]
                     dia_escala["Servir Santa Ceia"] = ", ".join(total_ceia)
                 
