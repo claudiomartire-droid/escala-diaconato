@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 import io
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm # Para gerenciar fontes
+import numpy as np # Para calcular o comprimento da coluna para ajuste
 
 # Configuração da Página
 st.set_page_config(page_title="Gerador de Escala Diaconato V5.6", layout="wide")
@@ -59,7 +62,7 @@ if arquivo_carregado:
                         for celula in df_h[col].dropna().astype(str):
                             for nome in nomes_membros:
                                 if nome in celula: contagem_ceia_historico[nome] += 1
-            except: continue
+            except: pass # Ignora erros de leitura de arquivos incompletos
 
     df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia_historico)
 
@@ -81,9 +84,14 @@ if arquivo_carregado:
     # TABS DE CONFERÊNCIA
     st.subheader("📋 Conferência de Regras e Equidade")
     t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Santa Ceia"])
-    with t1: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
-    with t2: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
-    with t3: st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values(by='historico_ceia'), use_container_width=True)
+    with t1: 
+        if regras_duplas: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
+        else: st.info("Sem duplas impeditivas.")
+    with t2: 
+        if regras_funcao: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
+        else: st.info("Sem restrições de função.")
+    with t3: 
+        st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values(by='historico_ceia'), use_container_width=True)
 
     # --- 2. CONFIGURAÇÕES (SIDEBAR) ---
     st.sidebar.header("2. Configurações")
@@ -160,10 +168,8 @@ if arquivo_carregado:
 
                 # RESTAURADO: FUNÇÃO ABERTURA (Peso 0.5)
                 aptos_ab = cands[cands['Abertura'] == "SIM"].copy()
-                # Remove restritos de função
                 aptos_ab = aptos_ab[~aptos_ab['Nome'].isin([r['Membro'] for r in regras_funcao if r['Função Proibida'] == "Abertura"])]
                 
-                # Se alguém já escalado no dia pode abrir (exceto Portaria 1), priorizamos para não gastar mais gente
                 ja_no_dia = [n for n in escalados_dia.keys() if n in aptos_ab['Nome'].values and n != dia_escala.get("Portaria 1 (Rua)")]
                 if ja_no_dia:
                     dia_escala["Abertura"] = ja_no_dia[0]
@@ -199,18 +205,140 @@ if arquivo_carregado:
                 df_mem.loc[df_mem['Nome'] == nome, 'historico_ceia'] += 1
         st.session_state.df_memoria = df_mem
 
-    # --- EXIBIÇÃO ---
+    # --- ÁREA DE EXIBIÇÃO E EXPORTAÇÃO FORMATADA ---
     if st.session_state.escala_gerada is not None:
         st.subheader("🗓️ Escala Mensal Gerada")
         st.dataframe(st.session_state.escala_gerada, use_container_width=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            out_esc = io.BytesIO()
-            st.session_state.escala_gerada.to_excel(out_esc, index=False)
-            st.download_button("📥 Baixar Escala (Excel)", out_esc.getvalue(), f"escala_{mes}_{ano}.xlsx", key="d_esc")
-        with c2:
+        
+        # Cria um contêiner para os botões de download
+        col_excel, col_image, col_history = st.columns(3)
+        
+        with col_excel:
+            # --- LÓGICA DE EXPORTAÇÃO EXCEL COM FORMATAÇÃO ---
+            output_excel = io.BytesIO()
+            with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
+                df_res = st.session_state.escala_gerada
+                df_res.to_excel(writer, index=False, sheet_name='Escala')
+                
+                workbook  = writer.book
+                worksheet = writer.sheets['Escala']
+
+                # Definição de Formatos
+                header_format = workbook.add_format({
+                    'bold': True, 'text_wrap': True, 'valign': 'vcenter',
+                    'align': 'center', 'fg_color': '#1F4E78', 'font_color': 'white', 'border': 1
+                })
+                cell_format = workbook.add_format({
+                    'valign': 'vcenter', 'align': 'center', 'border': 1
+                })
+                ceia_highlight = workbook.add_format({
+                    'bg_color': '#D9E1F2', 'border': 1, 'align': 'center'
+                })
+
+                # Aplicar cabeçalho formatado
+                for col_num, value in enumerate(df_res.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+
+                # Aplicar formatos nas linhas e destacar Santa Ceia
+                for row_num in range(len(df_res)):
+                    # Verifica se a data atual da linha é a data da Santa Ceia
+                    data_str_na_celula = str(df_res.iloc[row_num, 0]).split(' ')[0] # Pega 'DD/MM/YYYY'
+                    is_ceia = data_ceia.strftime('%d/%m/%Y') == data_str_na_celula
+                    current_format = ceia_highlight if is_ceia else cell_format
+                    
+                    for col_num in range(len(df_res.columns)):
+                        worksheet.write(row_num + 1, col_num, df_res.iloc[row_num, col_num], current_format)
+
+                # Ajuste Automático da Largura das Colunas
+                for i, col in enumerate(df_res.columns):
+                    # Calcula o comprimento máximo da string na coluna, incluindo o cabeçalho
+                    max_len = max(df_res[col].astype(str).str.len().max(), len(col))
+                    # Define a largura da coluna (adiciona um pouco de padding)
+                    worksheet.set_column(i, i, max_len + 2)
+
+
+            st.download_button(
+                label="📥 Baixar Escala Formatada (Excel)",
+                data=output_excel.getvalue(),
+                file_name=f"Escala_Diaconato_{mes}_{ano}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="d_esc_pretty"
+            )
+
+        with col_image:
+            # --- LÓGICA DE GERAÇÃO DE IMAGEM DA ESCALA ---
+            df_to_image = st.session_state.escala_gerada.copy()
+            
+            # Formatação para o dia da semana na imagem
+            df_to_image['Data'] = df_to_image['Data'].apply(lambda x: x.replace(' (Qua)', ' (Quarta)').replace(' (Sab)', ' (Sábado)').replace(' (Dom)', ' (Domingo)'))
+
+            # Configurações de estilo para a imagem
+            # Tentativa de usar fonte mais amigável, mas Streamlit/Matplotlib podem ter restrições de fonte em ambientes cloud
+            # font_path = 'path/to/your/font.ttf' # Opcional: Especifique um caminho se tiver uma fonte customizada
+            # if os.path.exists(font_path):
+            #     fm.fontManager.addfont(font_path)
+            #     prop = fm.FontProperties(fname=font_path)
+            #     plt.rcParams['font.family'] = prop.get_name()
+            # else:
+            plt.rcParams['font.family'] = 'DejaVu Sans' # Fonte padrão do Matplotlib
+
+            fig, ax = plt.subplots(figsize=(len(df_to_image.columns) * 2.5, len(df_to_image) * 0.7)) # Ajusta tamanho da figura
+            ax.axis('off') # Remove os eixos do gráfico
+
+            # Estilos de tabela
+            table = ax.table(
+                cellText=df_to_image.values,
+                colLabels=df_to_image.columns,
+                cellLoc='center',
+                loc='center',
+                colColours=['#1F4E78'] * len(df_to_image.columns) # Cor do cabeçalho
+            )
+            
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1.2, 1.2) # Aumenta um pouco o tamanho das células
+
+            # Formatação das células
+            for (i, j), cell in table.get_celld().items():
+                cell.set_edgecolor('#B0B0B0') # Bordas cinzas
+                cell.set_linewidth(1)
+                
+                if i == 0: # Cabeçalho
+                    cell.set_text_props(weight='bold', color='white')
+                else: # Corpo da tabela
+                    cell.set_text_props(color='black')
+                    
+                    # Destacar a linha da Santa Ceia
+                    data_celula_str = df_to_image.iloc[i-1, 0].split(' ')[0] # Pega 'DD/MM/YYYY' da coluna Data
+                    if data_ceia.strftime('%d/%m/%Y') == data_celula_str:
+                        cell.set_facecolor('#D9E1F2') # Fundo cinza claro para Santa Ceia
+
+            # Ajuste de layout para evitar cortes
+            fig.tight_layout()
+            
+            # Salva a imagem em um buffer
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.5, dpi=300)
+            buf.seek(0)
+            plt.close(fig) # Fecha a figura para liberar memória
+
+            st.download_button(
+                label="📸 Baixar Imagem da Escala (PNG)",
+                data=buf.getvalue(),
+                file_name=f"Escala_Diaconato_{mes}_{ano}.png",
+                mime="image/png",
+                key="d_img_v5"
+            )
+
+        with col_history:
+            # Exportação Simples do Histórico
             out_h = io.BytesIO()
             st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Baixar Histórico Acumulado", out_h.getvalue(), "historico_consolidado.csv", key="d_hist")
+            st.download_button(
+                label="💾 Baixar Histórico Acumulado",
+                data=out_h.getvalue(),
+                file_name="historico_consolidado.csv",
+                key="d_hist_v5"
+            )
 else:
     st.info("Aguardando arquivo membros_master.csv.")
