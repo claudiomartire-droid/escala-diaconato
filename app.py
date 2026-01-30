@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V4.6", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V4.7", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 4.6)")
-st.info("💡 Otimização: O sistema agora prioriza quem já está escalado no dia para realizar a Abertura.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 4.7)")
+st.info("💡 Santa Ceia: Seleção automática de 2 homens e 2 mulheres entre os escalados do dia.")
 
 def obter_primeiro_domingo(ano, mes):
     d = date(ano, mes, 1)
@@ -66,7 +66,7 @@ if arquivo_carregado:
             "Início": st.column_config.DateColumn(required=True), 
             "Fim": st.column_config.DateColumn(required=True)
         },
-        num_rows="dynamic", key="editor_ausencias_v46"
+        num_rows="dynamic", key="editor_ausencias_v47"
     )
 
     if st.sidebar.button("Gerar Escala Atualizada"):
@@ -101,7 +101,7 @@ if arquivo_carregado:
 
                 vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"] if nome_col_dia == "Domingo" else ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
-                # --- ESCALA DOS POSTOS PRINCIPAIS ---
+                # --- ESCALA DOS POSTOS ---
                 for vaga in vagas:
                     candidatos = candidatos_dia[~candidatos_dia['Nome'].isin(escalados_no_dia.keys())]
                     if vaga == "Portaria 1 (Rua)": candidatos = candidatos[candidatos['Sexo'] == 'M']
@@ -126,33 +126,37 @@ if arquivo_carregado:
                     else:
                         dia_escala[vaga] = "FALTA PESSOAL"
 
-                # --- LÓGICA DE ABERTURA OTIMIZADA ---
-                # 1. Filtra quem PODE fazer abertura (Abertura="SIM" e sem restrição de função)
+                # --- LÓGICA DE ABERTURA ---
                 membros_aptos_abertura = candidatos_dia[candidatos_dia['Abertura'] == "SIM"].copy()
                 restritos_abertura = [r['Membro'] for r in regras_funcao_csv if r['Função Proibida'] == "Abertura"]
                 membros_aptos_abertura = membros_aptos_abertura[~membros_aptos_abertura['Nome'].isin(restritos_abertura)]
-                
-                # 2. Tenta priorizar quem JÁ ESTÁ escalado no dia (exceto quem está na Portaria 1 Rua por segurança)
                 ja_escalados_aptos = [n for n in escalados_no_dia.keys() if n in membros_aptos_abertura['Nome'].values and n != dia_escala.get("Portaria 1 (Rua)")]
                 
                 if ja_escalados_aptos:
-                    # Se houver alguém já lá, escolhe um deles
                     dia_escala["Abertura"] = ja_escalados_aptos[0]
                 else:
-                    # Se ninguém escalado pode abrir, busca nos candidatos do dia que sobraram
                     sobra_abertura = membros_aptos_abertura[~membros_aptos_abertura['Nome'].isin(escalados_no_dia.keys())]
-                    if not sobra_abertura.empty:
-                        escolhido_ab = sobra_abertura.sort_values(by='escalas_no_mes').iloc[0]
-                        dia_escala["Abertura"] = escolhido_ab['Nome']
-                        # Opcional: Contar como escala extra se ele for SÓ para abrir? 
-                        # Aqui tratamos como "---" se não houver ninguém disponível.
-                    else:
-                        dia_escala["Abertura"] = "---"
+                    dia_escala["Abertura"] = sobra_abertura.sort_values(by='escalas_no_mes').iloc[0]['Nome'] if not sobra_abertura.empty else "---"
 
-                # Santa Ceia
+                # --- LÓGICA DE SANTA CEIA (OTIMIZADA) ---
                 if data_atual == data_ceia:
-                    aptos_ceia = [m for m in escalados_no_dia.keys() if m != dia_escala.get("Portaria 1 (Rua)")]
-                    dia_escala["Servir Santa Ceia"] = ", ".join([m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'M'][:2] + [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'F'][:2])
+                    # Só pode servir quem já está escalado no dia e não está na Rua
+                    aptos_ceia = [n for n in escalados_no_dia.keys() if n != dia_escala.get("Portaria 1 (Rua)")]
+                    # Filtra quem tem restrição explícita de Santa Ceia no CSV
+                    restritos_ceia = [r['Membro'] for r in regras_funcao_csv if r['Função Proibida'] == "Santa Ceia"]
+                    aptos_ceia = [m for m in aptos_ceia if m not in restritos_ceia]
+                    
+                    # Tenta pegar 2 Homens e 2 Mulheres
+                    servidores_h = [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'M'][:2]
+                    servidores_f = [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'F'][:2]
+                    
+                    # Se faltar de um gênero, completa com o outro até ter 4 pessoas
+                    total_servidores = servidores_h + servidores_f
+                    if len(total_servidores) < 4:
+                        extras = [m for m in aptos_ceia if m not in total_servidores]
+                        total_servidores = (total_servidores + extras)[:4]
+                    
+                    dia_escala["Servir Santa Ceia"] = ", ".join(total_servidores)
                 
                 ultimos_escalados = list(escalados_no_dia.keys())
                 escala_final.append(dia_escala)
