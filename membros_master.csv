@@ -1,0 +1,23 @@
+Grupo,Nome,Sexo,Lider,Abertura,Ornamentacao,Quarta_Feira,Sabado,Domingo
+A1,Eva Santos,F,NÃO,SIM,SIM,NÃO,1,1
+A2,Fernando,M,SIM,SIM,NÃO,2,2,2
+A3,Janete Mártire,F,SIM,SIM,NÃO,3,3,3
+A5,Neilson Ferreira,M,SIM,SIM,NÃO,5,5,NÃO
+A6,Isete Soares,F,NÃO,NÃO,SIM,6,6,6
+A7,Lilia Rose,F,NÃO,NÃO,SIM,7,7,7
+A8,João dos Santos,M,NÃO,SIM,NÃO,NÃO,8,8
+A9,Gabriel,M,NÃO,NÃO,NÃO,9,9,9
+B1,Antônio Guilherme,M,SIM,SIM,NÃO,NÃO,NÃO,1
+B3,Elaine Bráz,F,NÃO,NÃO,SIM,3,3,3
+B4,Maria Bragança,F,NÃO,NÃO,NÃO,4,4,4
+B5,Terezinha Barros,F,NÃO,SIM,NÃO,5,5,5
+B6,Marlene de Almeida,F,NÃO,NÃO,NÃO,6,6,6
+B8,Clayson de Souza,M,SIM,SIM,NÃO,NÃO,NÃO,8
+B9,Isabela,F,SIM,SIM,NÃO,9,9,8
+C1,Elaine Alves,F,NÃO,NÃO,NÃO,NÃO,NÃO,NÃO
+C3,Claudio Mártire,M,SIM,SIM,NÃO,3,3,3
+C4,Giovani Ferreira,M,NÃO,NÃO,NÃO,4,4,4
+C5,Maria das Dores,F,SIM,NÃO,SIM,5,5,5
+C6,Itamar de Almeida,M,NÃO,SIM,NÃO,6,6,6
+C7,Alzenira Xavier,F,NÃO,SIM,NÃO,NÃO,7,7
+C8,Marta Santos,F,SIM,SIM,NÃO,NÃO,NÃO,NÃO
