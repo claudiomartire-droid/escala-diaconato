@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.4", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.6", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.4)")
-st.success("✅ Erro de interface corrigido. Todas as regras de exclusão e sequência estão ativas.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.6)")
+st.info("⚖️ Pesos: Abertura e Ornamentação agora contam como 0.5 para o ranking de escalas.")
 
 # --- LÓGICA DE DATA PADRÃO ---
 hoje = datetime.now()
@@ -52,21 +52,14 @@ if arquivo_carregado:
                 if f and f.lower() != 'nan':
                     regras_funcao.append({"Membro": row['Nome'], "Função Proibida": f})
 
-    # --- CORREÇÃO DO ERRO: ESTRUTURA EXPANDIDA ---
     st.subheader("📋 Conferência de Regras")
     t1, t2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
-    
     with t1:
-        if regras_duplas:
-            st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
-        else:
-            st.info("Nenhuma regra de dupla impedida encontrada.")
-            
+        if regras_duplas: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
+        else: st.info("Sem duplas impeditivas.")
     with t2:
-        if regras_funcao:
-            st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
-        else:
-            st.info("Nenhuma restrição de função encontrada.")
+        if regras_funcao: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
+        else: st.info("Sem restrições de função.")
 
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
@@ -75,30 +68,15 @@ if arquivo_carregado:
     
     dias_semana = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     
-    # Datas de Exclusão
     data_inicio_mes = date(ano, mes, 1)
     if mes == 12: data_fim_mes = date(ano + 1, 1, 1) - timedelta(days=1)
     else: data_fim_mes = date(ano, mes + 1, 1) - timedelta(days=1)
     
-    datas_excluir = st.sidebar.multiselect(
-        "Datas para EXCLUIR (Sem Culto)",
-        options=pd.date_range(data_inicio_mes, data_fim_mes),
-        format_func=lambda x: x.strftime('%d/%m/%Y')
-    )
-    
+    datas_excluir = st.sidebar.multiselect("Datas para EXCLUIR", options=pd.date_range(data_inicio_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
     data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes), format="DD/MM/YYYY")
 
     st.sidebar.header("3. Férias / Ausências")
-    df_vazio = pd.DataFrame(columns=["Membro", "Início", "Fim"])
-    ausencias = st.sidebar.data_editor(
-        df_vazio,
-        column_config={
-            "Membro": st.column_config.SelectboxColumn(options=nomes_membros, required=True), 
-            "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), 
-            "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")
-        },
-        num_rows="dynamic", key="editor_v54"
-    )
+    ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]), column_config={"Membro": st.column_config.SelectboxColumn(options=nomes_membros, required=True), "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")}, num_rows="dynamic", key="editor_v56")
 
     # --- 4. MOTOR ---
     if st.sidebar.button("Gerar Escala Atualizada"):
@@ -110,16 +88,14 @@ if arquivo_carregado:
 
         for data in datas_mes:
             data_atual = data.date()
-            if any(data_atual == d.date() for d in datas_excluir):
-                continue
+            if any(data_atual == d.date() for d in datas_excluir): continue
                 
             nome_col_dia = mapa_dias.get(data.weekday())
             if nome_col_dia in dias_semana:
-                # Regra de Descanso: Remove quem trabalhou no último culto
                 candidatos = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 candidatos = candidatos[~candidatos['Nome'].isin(membros_ultimo_culto)]
 
-                # Filtro de Ausências
+                # Filtro Ausências
                 for _, aus in ausencias.iterrows():
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
                         if pd.to_datetime(aus['Início']).date() <= data_atual <= pd.to_datetime(aus['Fim']).date():
@@ -151,10 +127,9 @@ if arquivo_carregado:
                         escalados_dia[escolhido['Nome']] = escolhido
                         dia_escala[vaga] = escolhido['Nome']
                         df_membros.loc[df_membros['Nome'] == escolhido['Nome'], 'escalas_no_mes'] += 1
-                    else:
-                        dia_escala[vaga] = "FALTA PESSOAL"
+                    else: dia_escala[vaga] = "FALTA PESSOAL"
 
-                # Abertura (Respeitando Descanso)
+                # Abertura (Peso 0.5)
                 aptos_ab = candidatos[candidatos['Abertura'] == "SIM"].copy()
                 restritos_ab = [r['Membro'] for r in regras_funcao if r['Função Proibida'] == "Abertura"]
                 aptos_ab = aptos_ab[~aptos_ab['Nome'].isin(restritos_ab)]
@@ -167,19 +142,35 @@ if arquivo_carregado:
                     if not sobra_ab.empty:
                         escolhido_ab = sobra_ab.sort_values(by='escalas_no_mes').iloc[0]
                         dia_escala["Abertura"] = escolhido_ab['Nome']
+                        df_membros.loc[df_membros['Nome'] == escolhido_ab['Nome'], 'escalas_no_mes'] += 0.5
                         escalados_dia[escolhido_ab['Nome']] = escolhido_ab
                     else: dia_escala["Abertura"] = "---"
 
-                # Santa Ceia
+                # --- SANTA CEIA E ORNAMENTAÇÃO ---
                 if data_atual == data_ceia:
+                    # 1. Ornamentação (Pessoas EXCLUSIVAS que tenham SIM no CSV) - Peso 0.5
+                    aptos_orn = candidatos[(candidatos['Ornamentacao'] == "SIM") & (~candidatos['Nome'].isin(escalados_dia.keys()))].copy()
+                    if not aptos_orn.empty:
+                        escolhidos_orn = aptos_orn.sort_values(by='escalas_no_mes').head(2)
+                        dia_escala["Ornamentação"] = ", ".join(escolhidos_orn['Nome'].tolist())
+                        for n in escolhidos_orn['Nome']:
+                            df_membros.loc[df_membros['Nome'] == n, 'escalas_no_mes'] += 0.5
+                            escalados_dia[n] = n 
+                    else:
+                        dia_escala["Ornamentação"] = "FALTA PESSOAL"
+
+                    # 2. Servir Santa Ceia (4 pessoas entre as escaladas no dia)
                     aptos_ceia = [m for m in escalados_dia.keys() if m not in [r['Membro'] for r in regras_funcao if r['Função Proibida'] == "Santa Ceia"]]
-                    h = [m for m in aptos_ceia if escalados_dia[m]['Sexo'] == 'M'][:2]
-                    f = [m for m in aptos_ceia if escalados_dia[m]['Sexo'] == 'F'][:2]
-                    total = h + f
-                    if len(total) < 4: 
-                        extras = [m for m in aptos_ceia if m not in total]
-                        total = (total + extras)[:4]
-                    dia_escala["Servir Santa Ceia"] = ", ".join(total)
+                    
+                    def get_sex(nome): return df_membros.loc[df_membros['Nome'] == nome, 'Sexo'].values[0]
+                    
+                    h = [m for m in aptos_ceia if get_sex(m) == 'M'][:2]
+                    f = [m for m in aptos_ceia if get_sex(m) == 'F'][:2]
+                    total_ceia = (h + f)
+                    if len(total_ceia) < 4: 
+                        extras = [m for m in aptos_ceia if m not in total_ceia]
+                        total_ceia = (total_ceia + extras)[:4]
+                    dia_escala["Servir Santa Ceia"] = ", ".join(total_ceia)
                 
                 membros_ultimo_culto = list(escalados_dia.keys())
                 escala_final.append(dia_escala)
