@@ -1,12 +1,19 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import io
 
-st.set_page_config(page_title="Gerador de Escala - Diaconato V2.1", layout="wide")
+st.set_page_config(page_title="Gerador de Escala - Diaconato V2.2", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 2.1)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 2.2)")
 st.markdown("---")
+
+# Função para encontrar o primeiro domingo do mês
+def get_first_sunday(year, month):
+    d = date(year, month, 1)
+    while d.weekday() != 6: # 6 é Domingo
+        d += timedelta(days=1)
+    return d
 
 # 1. Upload e Tratamento de Dados
 st.sidebar.header("1. Base de Dados")
@@ -23,10 +30,10 @@ if uploaded_file:
     
     dias_culto_selecionados = st.sidebar.multiselect("Dias de Culto Semanais", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     
-    data_ceia = st.sidebar.date_input("Data da Santa Ceia")
+    # PONTO 3: Sugerir o primeiro domingo do mês como padrão
+    sugestao_ceia = get_first_sunday(ano, mes)
+    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=sugestao_ceia)
     
-    # --- CORREÇÃO DO ERRO AQUI ---
-    # Geramos todas as datas possíveis do mês de forma segura
     todas_datas_mes = pd.date_range(start=datetime(ano, mes, 1), periods=31)
     opcoes_exclusao = [d.to_pydatetime() for d in todas_datas_mes if d.month == mes]
     
@@ -35,13 +42,10 @@ if uploaded_file:
         options=opcoes_exclusao,
         format_func=lambda x: x.strftime('%d/%m/%Y')
     )
-    # Converter para apenas data (sem hora) para comparação
     datas_excluidas_set = {d.date() for d in datas_excluidas}
-    # -----------------------------
 
     if st.sidebar.button("Gerar Escala Atualizada"):
         inicio_mes = datetime(ano, mes, 1)
-        # Lógica para fim do mês
         if mes == 12: fim_mes = datetime(ano + 1, 1, 1) - pd.Timedelta(days=1)
         else: fim_mes = datetime(ano, mes + 1, 1) - pd.Timedelta(days=1)
             
@@ -52,7 +56,6 @@ if uploaded_file:
         df_membros['escalas_no_mes'] = 0 
         
         for data in datas:
-            # PONTO 4: Verifica se a data deve ser pulada
             if data.date() in datas_excluidas_set:
                 continue
                 
@@ -62,45 +65,56 @@ if uploaded_file:
             if nome_coluna_dia in dias_culto_selecionados:
                 disponiveis = df_membros[df_membros[nome_coluna_dia] != "NÃO"].copy()
                 dia_escala = {"Data": data.strftime('%d/%m (%a)')}
-                escalados_no_dia = {} 
+                escalados_no_dia = {} # Armazena Nome -> Dados do Membro (Series)
 
-                # PONTO 1: Estrutura de Vagas
+                # Definindo as vagas do dia
                 if nome_coluna_dia == "Domingo":
-                    vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (A)", "Frente Templo (B)"]
+                    vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"]
                 else:
                     vagas = ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
                 for vaga in vagas:
                     candidatos = disponiveis[~disponiveis['Nome'].isin(escalados_no_dia.keys())]
-                    if "Portaria 1" in vaga:
+                    
+                    # PONTO 1: Homem e Mulher na Frente do Templo (Domingo)
+                    if vaga == "Frente Templo (M)":
+                        candidatos = candidatos[candidatos['Sexo'] == 'M']
+                    elif vaga == "Frente Templo (F)":
+                        candidatos = candidatos[candidatos['Sexo'] == 'F']
+                    elif "Portaria 1" in vaga:
                         candidatos = candidatos.sort_values(by=['Sexo', 'escalas_no_mes'], ascending=[False, True])
-                    else:
-                        candidatos = candidatos.sort_values(by='escalas_no_mes')
+                    
+                    candidatos = candidatos.sort_values(by='escalas_no_mes')
 
                     if not candidatos.empty:
                         escolhido = candidatos.iloc[0]
-                        escalados_no_dia[escolhido['Nome']] = vaga
+                        escalados_no_dia[escolhido['Nome']] = escolhido
                         dia_escala[vaga] = escolhido['Nome']
                         df_membros.loc[df_membros['Nome'] == escolhido['Nome'], 'escalas_no_mes'] += 1
                     else:
                         dia_escala[vaga] = "FALTA PESSOAL"
 
-                # PONTO 2: Santa Ceia
+                # PONTO 2: Santa Ceia (2 Homens e 2 Mulheres dos já escalados)
                 if data.date() == data_ceia:
-                    nomes_ja_escalados = list(escalados_no_dia.keys())
-                    servidores = [n for n in nomes_ja_escalados if "Portaria 1" not in escalados_no_dia[n]]
-                    if len(servidores) < 4: servidores = nomes_ja_escalados
-                    dia_escala["Servir Santa Ceia"] = ", ".join(servidores[:4])
+                    nomes_escalados = list(escalados_no_dia.keys())
+                    # Filtra quem não está na Portaria 1 (Rua)
+                    aptos = [m for m in nomes_escalados if "Portaria 1" not in dia_escala.values() or m != dia_escala.get("Portaria 1 (Rua)")]
+                    
+                    homens_ceia = [m for m in aptos if escalados_no_dia[m]['Sexo'] == 'M'][:2]
+                    mulheres_ceia = [m for m in aptos if escalados_no_dia[m]['Sexo'] == 'F'][:2]
+                    
+                    servidores = homens_ceia + mulheres_ceia
+                    dia_escala["Servir Santa Ceia"] = ", ".join(servidores)
                     
                     ornamentadores = disponiveis[disponiveis['Ornamentacao'] == "SIM"].sort_values(by='escalas_no_mes')
-                    dia_escala["Ornamentação"] = ornamentadores.iloc[0]['Nome'] if not ornamentadores.empty else "Ninguém disponível"
+                    dia_escala["Ornamentação"] = ornamentadores.iloc[0]['Nome'] if not ornamentadores.empty else "---"
 
-                # PONTO 3: Abertura (Não conta peso)
+                # PONTO 3 (Abertura continua sem peso)
                 candidatos_abertura = disponiveis[disponiveis['Abertura'] == "SIM"]
-                quem_ja_esta_dentro = [n for n, f in escalados_no_dia.items() if "Portaria 1" not in f and n in candidatos_abertura['Nome'].values]
+                ja_no_templo = [n for n in escalados_no_dia.keys() if n in candidatos_abertura['Nome'].values and "Portaria 1" not in dia_escala.values()]
                 
-                if quem_ja_esta_dentro:
-                    dia_escala["Abertura"] = quem_ja_esta_dentro[0]
+                if ja_no_templo:
+                    dia_escala["Abertura"] = ja_no_templo[0]
                 else:
                     sobras = candidatos_abertura[~candidatos_abertura['Nome'].isin(escalados_no_dia.keys())]
                     dia_escala["Abertura"] = sobras.iloc[0]['Nome'] if not sobras.empty else "FALTA PESSOAL"
