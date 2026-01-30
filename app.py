@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.1", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.2", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.1)")
-st.info("✅ Estabilidade corrigida: As tabelas de conferência agora usam blocos de código mais robustos.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.2)")
+st.info("📅 Datas padronizadas para DD/MM/AAAA e regra de descanso aplicada à Abertura.")
 
 # --- LÓGICA DE DATA PADRÃO (REGRA DA 1ª SEMANA) ---
 hoje = datetime.now()
@@ -60,21 +60,14 @@ if arquivo_carregado:
                 if func and func.lower() != 'nan':
                     regras_funcao_csv.append({"Membro": row['Nome'], "Função Proibida": func})
 
-    # --- EXIBIÇÃO DAS REGRAS (CORREÇÃO DO ERRO ATTRIBUTERROR) ---
     st.subheader("📋 Conferência de Regras do CSV")
     tab1, tab2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
-    
     with tab1:
-        if regras_duplas_csv:
-            st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True)
-        else:
-            st.info("Nenhuma regra de dupla encontrada.")
-            
+        if regras_duplas_csv: st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True)
+        else: st.info("Sem duplas impeditivas.")
     with tab2:
-        if regras_funcao_csv:
-            st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True)
-        else:
-            st.info("Nenhuma restrição de função encontrada.")
+        if regras_funcao_csv: st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True)
+        else: st.info("Sem restrições de função.")
 
     # --- 2. INTERFACE LATERAL ---
     st.sidebar.header("2. Configurações")
@@ -84,7 +77,9 @@ if arquivo_carregado:
         "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1])
     
     dias_culto = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
-    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes))
+    
+    # AJUSTE: Formato de exibição da Santa Ceia
+    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes), format="DD/MM/YYYY")
 
     st.sidebar.header("3. Férias / Ausências")
     df_vazio_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
@@ -95,7 +90,7 @@ if arquivo_carregado:
             "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), 
             "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")
         },
-        num_rows="dynamic", key="editor_ausencias_v51"
+        num_rows="dynamic", key="editor_ausencias_v52"
     )
 
     # --- 4. MOTOR DE GERAÇÃO ---
@@ -108,15 +103,17 @@ if arquivo_carregado:
         mapa_dias = {2: "Quarta_Feira", 5: "Sabado", 6: "Domingo"}
         escala_final = []
         df_membros['escalas_no_mes'] = 0 
-        ultimos_escalados = []
+        # Lista de membros escalados no culto anterior para garantir o descanso
+        membros_ultimo_culto = []
 
         for data in datas:
             data_atual = data.date()
             nome_col_dia = mapa_dias.get(data.weekday())
             
             if nome_col_dia in dias_culto:
+                # REGRA DE SEQUÊNCIA: Remove quem trabalhou no último culto
                 candidatos_dia = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
-                candidatos_dia = candidatos_dia[~candidatos_dia['Nome'].isin(ultimos_escalados)]
+                candidatos_dia = candidatos_dia[~candidatos_dia['Nome'].isin(membros_ultimo_culto)]
 
                 # Filtro de Ausências
                 for _, aus in ausencias_editadas.iterrows():
@@ -126,12 +123,12 @@ if arquivo_carregado:
                                 candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
                         except: continue
 
-                # FORMATO DE DATA DD/MM/AAAA
                 dia_escala = {"Data": data.strftime('%d/%m/%Y (%a)')}
                 escalados_no_dia = {} 
 
                 vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"] if nome_col_dia == "Domingo" else ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
+                # --- ESCALA DOS POSTOS ---
                 for vaga in vagas:
                     candidatos = candidatos_dia[~candidatos_dia['Nome'].isin(escalados_no_dia.keys())]
                     if vaga == "Portaria 1 (Rua)": candidatos = candidatos[candidatos['Sexo'] == 'M']
@@ -156,17 +153,27 @@ if arquivo_carregado:
                     else:
                         dia_escala[vaga] = "FALTA PESSOAL"
 
-                # Abertura
+                # --- LÓGICA DE ABERTURA (COM REGRA DE SEQUÊNCIA) ---
+                # Filtra aptos que NÃO trabalharam no culto anterior e NÃO estão escalados na rua hoje
                 membros_aptos_ab = candidatos_dia[candidatos_dia['Abertura'] == "SIM"].copy()
                 restritos_ab = [r['Membro'] for r in regras_funcao_csv if r['Função Proibida'] == "Abertura"]
                 membros_aptos_ab = membros_aptos_ab[~membros_aptos_ab['Nome'].isin(restritos_ab)]
+                
+                # Prioriza quem já está no dia (exceto rua)
                 ja_escalados_ab = [n for n in escalados_no_dia.keys() if n in membros_aptos_ab['Nome'].values and n != dia_escala.get("Portaria 1 (Rua)")]
                 
                 if ja_escalados_ab:
                     dia_escala["Abertura"] = ja_escalados_ab[0]
                 else:
+                    # Busca quem sobrou dos candidatos do dia (que já respeitam a folga do culto anterior)
                     sobra_ab = membros_aptos_ab[~membros_aptos_ab['Nome'].isin(escalados_no_dia.keys())]
-                    dia_escala["Abertura"] = sobra_ab.sort_values(by='escalas_no_mes').iloc[0]['Nome'] if not sobra_ab.empty else "---"
+                    if not sobra_ab.empty:
+                        escolhido_ab = sobra_ab.sort_values(by='escalas_no_mes').iloc[0]
+                        dia_escala["Abertura"] = escolhido_ab['Nome']
+                        df_membros.loc[df_membros['Nome'] == escolhido_ab['Nome'], 'escalas_no_mes'] += 0.5 # Conta meia escala para abertura solo
+                        escalados_no_dia[escolhido_ab['Nome']] = escolhido_ab
+                    else:
+                        dia_escala["Abertura"] = "---"
 
                 # Santa Ceia
                 if data_atual == data_ceia:
@@ -181,7 +188,8 @@ if arquivo_carregado:
                         total_ceia = (total_ceia + extras)[:4]
                     dia_escala["Servir Santa Ceia"] = ", ".join(total_ceia)
                 
-                ultimos_escalados = list(escalados_no_dia.keys())
+                # Atualiza quem trabalhou para a folga do próximo culto
+                membros_ultimo_culto = list(escalados_no_dia.keys())
                 escala_final.append(dia_escala)
 
         st.subheader("🗓️ Escala Gerada")
