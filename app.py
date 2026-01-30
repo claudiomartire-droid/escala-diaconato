@@ -4,10 +4,10 @@ from datetime import datetime, date, timedelta
 import io
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.0", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.1", layout="wide")
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.0)")
-st.info("📅 Inteligência de Datas: O sistema agora sugere automaticamente o mês de planejamento com base no dia atual.")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.1)")
+st.info("✅ Estabilidade corrigida: As tabelas de conferência agora usam blocos de código mais robustos.")
 
 # --- LÓGICA DE DATA PADRÃO (REGRA DA 1ª SEMANA) ---
 hoje = datetime.now()
@@ -15,7 +15,6 @@ if hoje.day <= 7:
     mes_padrao = hoje.month
     ano_padrao = hoje.year
 else:
-    # Se for dezembro, o próximo mês é janeiro do ano seguinte
     if hoje.month == 12:
         mes_padrao = 1
         ano_padrao = hoje.year + 1
@@ -45,7 +44,7 @@ if arquivo_carregado:
 
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
-    # Processamento de Regras para Conferência
+    # Processamento de Regras
     regras_duplas_csv = []
     if 'Nao_Escalar_Com' in df_membros.columns:
         for _, row in df_membros[df_membros['Nao_Escalar_Com'].notna()].iterrows():
@@ -61,14 +60,24 @@ if arquivo_carregado:
                 if func and func.lower() != 'nan':
                     regras_funcao_csv.append({"Membro": row['Nome'], "Função Proibida": func})
 
+    # --- EXIBIÇÃO DAS REGRAS (CORREÇÃO DO ERRO ATTRIBUTERROR) ---
     st.subheader("📋 Conferência de Regras do CSV")
     tab1, tab2 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função"])
-    with tab1: st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True) if regras_duplas_csv else st.write("Sem duplas.")
-    with tab2: st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True) if regras_funcao_csv else st.write("Sem restrições.")
+    
+    with tab1:
+        if regras_duplas_csv:
+            st.dataframe(pd.DataFrame(regras_duplas_csv), use_container_width=True)
+        else:
+            st.info("Nenhuma regra de dupla encontrada.")
+            
+    with tab2:
+        if regras_funcao_csv:
+            st.dataframe(pd.DataFrame(regras_funcao_csv), use_container_width=True)
+        else:
+            st.info("Nenhuma restrição de função encontrada.")
 
     # --- 2. INTERFACE LATERAL ---
     st.sidebar.header("2. Configurações")
-    # Aplica o ano e mês calculados pela regra da primeira semana
     ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=ano_padrao)
     mes = st.sidebar.selectbox("Mês", range(1, 13), index=mes_padrao-1, format_func=lambda x: [
         "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
@@ -86,7 +95,7 @@ if arquivo_carregado:
             "Início": st.column_config.DateColumn(required=True, format="DD/MM/YYYY"), 
             "Fim": st.column_config.DateColumn(required=True, format="DD/MM/YYYY")
         },
-        num_rows="dynamic", key="editor_ausencias_v50"
+        num_rows="dynamic", key="editor_ausencias_v51"
     )
 
     # --- 4. MOTOR DE GERAÇÃO ---
@@ -117,7 +126,7 @@ if arquivo_carregado:
                                 candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
                         except: continue
 
-                # DATA FORMATADA EM DD/MM/AAAA
+                # FORMATO DE DATA DD/MM/AAAA
                 dia_escala = {"Data": data.strftime('%d/%m/%Y (%a)')}
                 escalados_no_dia = {} 
 
@@ -176,12 +185,12 @@ if arquivo_carregado:
                 escala_final.append(dia_escala)
 
         st.subheader("🗓️ Escala Gerada")
-        df_final_view = pd.DataFrame(escala_final)
-        st.dataframe(df_final_view, use_container_width=True)
+        df_final = pd.DataFrame(escala_final)
+        st.dataframe(df_final, use_container_width=True)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_final_view.to_excel(writer, index=False, sheet_name='Escala')
-        st.download_button(label="📥 Baixar Escala em Excel", data=output.getvalue(), file_name=f"escala_diaconato_{mes}_{ano}.xlsx")
+            df_final.to_excel(writer, index=False, sheet_name='Escala')
+        st.download_button(label="📥 Baixar Escala em Excel", data=output.getvalue(), file_name=f"escala_{mes}_{ano}.xlsx")
 else:
     st.info("Aguardando upload do arquivo membros_master.csv.")
