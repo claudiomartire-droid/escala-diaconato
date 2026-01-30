@@ -5,25 +5,19 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.6", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.7", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.6)")
-
-# --- FUNÇÕES ---
-def obter_primeiro_domingo(ano, mes):
-    d = date(ano, mes, 1)
-    while d.weekday() != 6: d += timedelta(days=1)
-    return d
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.7)")
 
 # --- 1. CARGA DE DADOS ---
 st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
-arquivos_historicos = st.sidebar.file_uploader("Suba históricos ou consolidado", type=["csv", "xlsx"], accept_multiple_files=True)
+arquivos_historicos = st.sidebar.file_uploader("Suba históricos", type=["csv", "xlsx"], accept_multiple_files=True)
 
 if arquivo_carregado:
     try:
@@ -35,44 +29,21 @@ if arquivo_carregado:
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
     # Processamento de Equidade
-    contagem_ceia_historico = {nome: 0 for nome in nomes_membros}
+    contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
             try:
                 df_h = pd.read_csv(arq) if arq.name.endswith('.csv') else pd.read_excel(arq)
                 if 'historico_ceia' in df_h.columns:
-                    for _, row in df_h.iterrows():
-                        if row['Nome'] in contagem_ceia_historico:
-                            contagem_ceia_historico[row['Nome']] += row['historico_ceia']
-                else:
-                    cols = [c for c in df_h.columns if any(x in c for x in ["Santa Ceia", "Ornamentação"])]
-                    for col in cols:
-                        for cel in df_h[col].dropna().astype(str):
-                            for nome in nomes_membros:
-                                if nome in cel: contagem_ceia_historico[nome] += 1
+                    for _, r in df_h.iterrows():
+                        if r['Nome'] in contagem_ceia: contagem_ceia[r['Nome']] += r['historico_ceia']
             except: continue
-    df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia_historico)
+    df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia)
 
-    # --- TABS DE CONFERÊNCIA ---
+    # Tabs de Conferência
     st.subheader("📋 Conferência de Regras e Equidade")
     t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Santa Ceia"])
-    
-    with t1:
-        regras_d = []
-        if 'Nao_Escalar_Com' in df_membros.columns:
-            for _, r in df_membros[df_membros['Nao_Escalar_Com'].notna()].iterrows():
-                regras_d.append({"Membro": r['Nome'], "Evitar": r['Nao_Escalar_Com']})
-        st.dataframe(pd.DataFrame(regras_d), use_container_width=True)
-
-    with t2:
-        regras_f = []
-        if 'Funcao_Restrita' in df_membros.columns:
-            for _, r in df_membros[df_membros['Funcao_Restrita'].notna()].iterrows():
-                regras_f.append({"Membro": r['Nome'], "Restrição": r['Funcao_Restrita']})
-        st.dataframe(pd.DataFrame(regras_f), use_container_width=True)
-
-    with t3:
-        st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values('historico_ceia'), use_container_width=True)
+    with t3: st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values('historico_ceia'), use_container_width=True)
 
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
@@ -80,25 +51,18 @@ if arquivo_carregado:
     ano = st.sidebar.number_input("Ano", 2025, 2030, hoje.year + (1 if hoje.month == 12 else 0))
     mes = st.sidebar.selectbox("Mês", range(1, 13), index=(hoje.month % 12), format_func=lambda x: ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][x-1])
     dias_semana = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
-    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes))
+    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=date(ano, mes, 1))
     
     data_ini = date(ano, mes, 1)
     data_fim = (date(ano + (1 if mes==12 else 0), 1 if mes==12 else mes+1, 1) - timedelta(days=1))
-    datas_excluir = st.sidebar.multiselect("Datas para EXCLUIR", options=pd.date_range(data_ini, data_fim), format_func=lambda x: x.strftime('%d/%m/%Y'))
+    datas_excluir = st.sidebar.multiselect("Datas EXCLUÍDAS", options=pd.date_range(data_ini, data_fim), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. FÉRIAS / AUSÊNCIAS ---
+    # --- 3. FÉRIAS ---
     st.sidebar.header("3. Férias / Ausências")
-    ausencias = st.sidebar.data_editor(
-        pd.DataFrame(columns=["Membro", "Início", "Fim"]),
-        column_config={
-            "Membro": st.column_config.SelectboxColumn(options=nomes_membros),
-            "Início": st.column_config.DateColumn(format="DD/MM/YYYY"),
-            "Fim": st.column_config.DateColumn(format="DD/MM/YYYY")
-        }, num_rows="dynamic"
-    )
+    ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]), column_config={"Membro": st.column_config.SelectboxColumn(options=nomes_membros), "Início": st.column_config.DateColumn(format="DD/MM/YYYY"), "Fim": st.column_config.DateColumn(format="DD/MM/YYYY")}, num_rows="dynamic")
 
-    # --- MOTOR DE GERAÇÃO ---
-    if st.sidebar.button("Gerar Escala Completa"):
+    # --- MOTOR ---
+    if st.sidebar.button("Gerar Escala Completa V5.7"):
         datas_mes = pd.date_range(data_ini, data_fim)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
@@ -124,7 +88,6 @@ if arquivo_carregado:
                 dia_escala = {"Data": f"{data.strftime('%d/%m/%Y')} ({dias_pt[data.weekday()]})"}
                 escalados_dia = []
 
-                # Vagas Dinâmicas
                 vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente (M)", "Frente (F)"] if data.weekday() == 6 else ["Portaria 1 (Rua)", "Portaria 2", "Frente"]
 
                 for v in vagas:
@@ -138,68 +101,85 @@ if arquivo_carregado:
                         dia_escala[v] = escolhido
                         escalados_dia.append(escolhido)
                         df_membros.loc[df_membros['Nome'] == escolhido, 'escalas_no_mes'] += 1
-                
-                # Abertura e Santa Ceia
+
+                # ABERTURA (RESTAURADO)
+                aptos_ab = cands[cands['Abertura'] == "SIM"].copy()
+                ja_no_dia = [n for n in escalados_dia if n in aptos_ab['Nome'].values]
+                if ja_no_dia:
+                    dia_escala["Abertura"] = ja_no_dia[0]
+                else:
+                    sobra_ab = aptos_ab[~aptos_ab['Nome'].isin(escalados_dia)]
+                    if not sobra_ab.empty:
+                        escolhido_ab = sobra_ab.sort_values(['historico_ceia', 'escalas_no_mes']).iloc[0]['Nome']
+                        dia_escala["Abertura"] = escolhido_ab
+                        df_membros.loc[df_membros['Nome'] == escolhido_ab, 'escalas_no_mes'] += 0.5
+                        escalados_dia.append(escolhido_ab)
+
                 if data_atual == data_ceia:
                     dia_escala["Servir Ceia"] = ", ".join(escalados_dia[:4])
-                    aptos_orn = cands[(cands['Ornamentacao'] == "SIM") & (~cands['Nome'].isin(escalados_dia))]
-                    if not aptos_orn.empty:
-                        dia_escala["Ornamentação"] = aptos_orn.iloc[0]['Nome']
-
+                
                 escala_final.append(dia_escala)
                 membros_ultimo_culto = escalados_dia
 
         st.session_state.escala_gerada = pd.DataFrame(escala_final)
         st.session_state.df_memoria = df_membros[['Nome', 'historico_ceia']]
 
-    # --- EXIBIÇÃO E EXPORTAÇÃO ---
+    # --- EXPORTAÇÃO FORMATADA ---
     if st.session_state.escala_gerada is not None:
         st.dataframe(st.session_state.escala_gerada, use_container_width=True)
         
-        c_ex, c_img, c_hist = st.columns(3)
-        
+        c_ex, c_img = st.columns(2)
         with c_ex:
             output = io.BytesIO()
             df_ex = st.session_state.escala_gerada.fillna("---").astype(str)
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_ex.to_excel(writer, index=False, sheet_name='Escala')
                 workbook = writer.book
-                worksheet = writer.sheets['Escala']
-                header_fmt = workbook.add_format({'bold': True, 'fg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
-                cell_fmt = workbook.add_format({'border': 1, 'align': 'center'})
-                highlight = workbook.add_format({'bg_color': '#D9E1F2', 'border': 1, 'align': 'center'})
+                ws = writer.sheets['Escala']
+                # Formatos
+                f_header = workbook.add_format({'bold':True,'fg_color':'#1F4E78','font_color':'white','border':1,'align':'center'})
+                f_qua = workbook.add_format({'bg_color':'#EBF1DE','border':1}) # Verde Claro
+                f_sab = workbook.add_format({'bg_color':'#F2F2F2','border':1}) # Cinza
+                f_dom = workbook.add_format({'bg_color':'#FFF2CC','border':1}) # Amarelo
+                f_ceia = workbook.add_format({'bg_color':'#D9E1F2','border':1,'bold':True}) # Azul Ceia
                 
-                for col_num, value in enumerate(df_ex.columns.values):
-                    worksheet.write(0, col_num, value, header_fmt)
+                for col_num, val in enumerate(df_ex.columns.values): ws.write(0, col_num, val, f_header)
                 
-                for row_num in range(len(df_ex)):
-                    fmt = highlight if data_ceia.strftime('%d/%m/%Y') in df_ex.iloc[row_num, 0] else cell_fmt
-                    for col_num in range(len(df_ex.columns)):
-                        worksheet.write(row_num + 1, col_num, df_ex.iloc[row_num, col_num], fmt)
-                worksheet.set_column(0, 10, 18)
-            st.download_button("📥 Excel Formatado", output.getvalue(), "escala.xlsx")
+                for r_idx in range(len(df_ex)):
+                    data_str = df_ex.iloc[r_idx, 0]
+                    # Lógica de cor por dia
+                    current_fmt = workbook.add_format({'border':1})
+                    if "(Qua)" in data_str: current_fmt = f_qua
+                    elif "(Sáb)" in data_str: current_fmt = f_sab
+                    elif "(Dom)" in data_str: current_fmt = f_dom
+                    
+                    if data_ceia.strftime('%d/%m/%Y') in data_str: current_fmt = f_ceia
+                    
+                    for c_idx in range(len(df_ex.columns)):
+                        ws.write(r_idx + 1, c_idx, df_ex.iloc[r_idx, c_idx], current_fmt)
+                ws.set_column(0, 15, 20)
+            st.download_button("📥 Excel Colorido por Dia", output.getvalue(), "escala_colorida.xlsx")
 
         with c_img:
             df_img = st.session_state.escala_gerada.fillna("---")
-            fig, ax = plt.subplots(figsize=(14, len(df_img)*0.6 + 1))
+            # Aumento do tamanho da figura para evitar cortes
+            fig, ax = plt.subplots(figsize=(18, len(df_img)*0.8 + 2)) 
             ax.axis('off')
             table = ax.table(cellText=df_img.values, colLabels=df_img.columns, loc='center', cellLoc='center', colColours=['#1F4E78']*len(df_img.columns))
             table.auto_set_font_size(False)
-            table.set_fontsize(10)
-            table.scale(1.2, 1.5)
-            # Pintar cabeçalho e linhas
+            table.set_fontsize(11)
+            table.scale(1.2, 2.5) # Células bem altas para caber nomes
+            
             for (i, j), cell in table.get_celld().items():
                 if i == 0: cell.set_text_props(color='white', weight='bold')
-                if i > 0 and data_ceia.strftime('%d/%m/%Y') in df_img.iloc[i-1, 0]: cell.set_facecolor('#D9E1F2')
+                else:
+                    d_text = df_img.iloc[i-1, 0]
+                    if data_ceia.strftime('%d/%m/%Y') in d_text: cell.set_facecolor('#D9E1F2')
+                    elif "(Qua)" in d_text: cell.set_facecolor('#EBF1DE')
+                    elif "(Dom)" in d_text: cell.set_facecolor('#FFF2CC')
             
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight', dpi=200)
-            st.download_button("📸 Imagem p/ WhatsApp", buf.getvalue(), "escala.png")
+            plt.savefig(buf, format='png', bbox_inches='tight', dpi=300) # Alta definição
+            st.download_button("📸 Imagem p/ WhatsApp (HD)", buf.getvalue(), "escala_diaconato.png")
 
-        with c_hist:
-            out_h = io.BytesIO()
-            st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Baixar Histórico", out_h.getvalue(), "historico_consolidado.csv")
-
-else:
-    st.info("Aguardando arquivo membros_master.csv")
+else: st.info("Suba o arquivo master para começar.")
