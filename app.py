@@ -68,13 +68,22 @@ if arquivo_carregado:
             if nome_coluna_dia in dias_culto:
                 candidatos_dia = df_membros[df_membros[nome_coluna_dia] != "NÃO"].copy()
                 
-                # Filtro de Ausências
+# --- BLOCO DE AUSÊNCIAS CORRIGIDO (V2.8) ---
                 for _, aus in df_ausencias.iterrows():
+                    # Verificamos se os campos não estão vazios
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
-                        inicio = aus['Início'] if isinstance(aus['Início'], date) else aus['Início'].date()
-                        fim = aus['Fim'] if isinstance(aus['Fim'], date) else aus['Fim'].date()
-                        if inicio <= data_atual <= fim:
-                            candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
+                        try:
+                            # Converte qualquer formato para datetime e depois para date puro
+                            data_inicio = pd.to_datetime(aus['Início']).date()
+                            data_fim = pd.to_datetime(aus['Fim']).date()
+                            
+                            # Compara com a data atual do loop
+                            if data_inicio <= data_atual <= data_fim:
+                                candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
+                        except Exception:
+                            # Se a data for inválida ou impossível de converter, ignora a regra
+                            continue
+                # --------------------------------------------
 
                 dia_escala = {"Data": data.strftime('%d/%m (%a)')}
                 escalados_no_dia = {} 
@@ -132,3 +141,4 @@ if arquivo_carregado:
         st.download_button(label="📥 Baixar Excel", data=output.getvalue(), file_name=f"escala_{mes}_{ano}.xlsx")
 else:
     st.info("Por favor, suba o arquivo CSV para começar.")
+
