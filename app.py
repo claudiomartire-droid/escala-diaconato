@@ -1,60 +1,103 @@
-for data in datas:
-            data_atual = data.date() # Converte para data pura para comparação
+import streamlit as st
+import pandas as pd
+from datetime import datetime, date, timedelta
+import io
+
+# Configuração da Página
+st.set_page_config(page_title="Gerador de Escala - Diaconato Pro", layout="wide")
+
+st.title("⛪ Gerador de Escala de Diaconato (Versão 2.7)")
+st.markdown("---")
+
+def obter_primeiro_domingo(ano, mes):
+    d = date(ano, mes, 1)
+    while d.weekday() != 6: d += timedelta(days=1)
+    return d
+
+# --- SIDEBAR / BARRA LATERAL ---
+st.sidebar.header("1. Base de Dados")
+arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
+
+if arquivo_carregado:
+    df_membros = pd.read_csv(arquivo_carregado)
+    nomes_membros = sorted(df_membros['Nome'].tolist())
+    
+    st.sidebar.header("2. Configurações do Mês")
+    ano = st.sidebar.number_input("Ano", min_value=2025, max_value=2030, value=2026)
+    mes = st.sidebar.selectbox("Mês", range(1, 13), index=0, format_func=lambda x: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1])
+    
+    dias_culto = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
+    data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano, mes))
+
+    # --- TABELAS DE REGRAS ---
+    st.sidebar.header("3. Regras de Duplas")
+    df_duplas = st.sidebar.data_editor(pd.DataFrame(columns=["Pessoa A", "Pessoa B"]),
+        column_config={"Pessoa A": st.column_config.SelectboxColumn(options=nomes_membros), "Pessoa B": st.column_config.SelectboxColumn(options=nomes_membros)},
+        num_rows="dynamic", key="ed_duplas")
+
+    st.sidebar.header("4. Restrições de Função")
+    df_restricoes = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Função Proibida"]),
+        column_config={"Membro": st.column_config.SelectboxColumn(options=nomes_membros), "Função Proibida": st.column_config.SelectboxColumn(options=["Portaria 1 (Rua)", "Portaria 2", "Frente Templo", "Abertura", "Santa Ceia"])},
+        num_rows="dynamic", key="ed_funcoes")
+
+    st.sidebar.header("5. Férias / Ausências")
+    df_ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]),
+        column_config={"Membro": st.column_config.SelectboxColumn(options=nomes_membros), "Início": st.column_config.DateColumn(), "Fim": st.column_config.DateColumn()},
+        num_rows="dynamic", key="ed_ausencias")
+
+    if st.sidebar.button("Gerar Escala"):
+        # --- DEFINIÇÃO DA VARIÁVEL 'datas' (Resolve o NameError) ---
+        inicio_foco = datetime(ano, mes, 1)
+        # Calcula o último dia do mês
+        if mes == 12: proximo_mes = datetime(ano + 1, 1, 1)
+        else: proximo_mes = datetime(ano, mes + 1, 1)
+        fim_foco = proximo_mes - timedelta(days=1)
+        
+        datas = pd.date_range(inicio_foco, fim_foco)
+        # ----------------------------------------------------------
+
+        mapa_dias = {2: "Quarta_Feira", 5: "Sabado", 6: "Domingo"}
+        escala_final = []
+        df_membros['escalas_no_mes'] = 0 
+        
+        for data in datas:
+            data_atual = data.date()
             dia_semana_num = data.weekday()
             nome_coluna_dia = mapa_dias.get(dia_semana_num)
             
             if nome_coluna_dia in dias_culto:
-                # 1. Filtro de Disponibilidade Geral
                 candidatos_dia = df_membros[df_membros[nome_coluna_dia] != "NÃO"].copy()
                 
-                # --- CORREÇÃO DO ERRO DE TYPEERROR AQUI ---
+                # Filtro de Ausências
                 for _, aus in df_ausencias.iterrows():
-                    # Garantimos que os valores de início e fim sejam convertidos para o tipo date
-                    if pd.notna(aus['Início']) and pd.notna(aus['Fim']):
-                        try:
-                            # Converte para objeto date se for Timestamp ou String
-                            inicio = aus['Início'] if isinstance(aus['Início'], date) else aus['Início'].date()
-                            fim = aus['Fim'] if isinstance(aus['Fim'], date) else aus['Fim'].date()
-                            
-                            if inicio <= data_atual <= fim:
-                                candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
-                        except:
-                            continue # Pula se a data estiver em formato inválido no editor
-                # ------------------------------------------
+                    if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
+                        inicio = aus['Início'] if isinstance(aus['Início'], date) else aus['Início'].date()
+                        fim = aus['Fim'] if isinstance(aus['Fim'], date) else aus['Fim'].date()
+                        if inicio <= data_atual <= fim:
+                            candidatos_dia = candidatos_dia[candidatos_dia['Nome'] != aus['Membro']]
 
                 dia_escala = {"Data": data.strftime('%d/%m (%a)')}
                 escalados_no_dia = {} 
 
-                # Define as vagas (Domingo x Resto da semana)
-                if nome_coluna_dia == "Domingo":
-                    vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"]
-                else:
-                    vagas = ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
+                vagas = ["Portaria 1 (Rua)", "Portaria 2 (A)", "Portaria 2 (B)", "Frente Templo (M)", "Frente Templo (F)"] if nome_coluna_dia == "Domingo" else ["Portaria 1 (Rua)", "Portaria 2 (Templo)", "Frente Templo"]
 
                 for vaga in vagas:
                     candidatos = candidatos_dia[~candidatos_dia['Nome'].isin(escalados_no_dia.keys())]
                     
-                    # Regra de Duplas
+                    # Regras de Duplas
                     for _, dupla in df_duplas.iterrows():
                         if pd.notna(dupla['Pessoa A']) and pd.notna(dupla['Pessoa B']):
-                            if dupla['Pessoa A'] in escalados_no_dia: 
-                                candidatos = candidatos[candidatos['Nome'] != dupla['Pessoa B']]
-                            if dupla['Pessoa B'] in escalados_no_dia: 
-                                candidatos = candidatos[candidatos['Nome'] != dupla['Pessoa A']]
+                            if dupla['Pessoa A'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != dupla['Pessoa B']]
+                            if dupla['Pessoa B'] in escalados_no_dia: candidatos = candidatos[candidatos['Nome'] != dupla['Pessoa A']]
 
-                    # Regra de Restrição de Função
+                    # Restrição de Função
                     for _, rest in df_restricoes.iterrows():
-                        if pd.notna(rest['Membro']) and pd.notna(rest['Função Proibida']):
-                            if rest['Função Proibida'] in vaga:
-                                candidatos = candidatos[candidatos['Nome'] != rest['Membro']]
+                        if pd.notna(rest['Membro']) and pd.notna(rest['Função Proibida']) and rest['Função Proibida'] in vaga:
+                            candidatos = candidatos[candidatos['Nome'] != rest['Membro']]
 
-                    # Filtro de Gênero para Frente do Templo no Domingo
-                    if "Frente Templo (M)" in vaga: 
-                        candidatos = candidatos[candidatos['Sexo'] == 'M']
-                    elif "Frente Templo (F)" in vaga: 
-                        candidatos = candidatos[candidatos['Sexo'] == 'F']
+                    if "Frente Templo (M)" in vaga: candidatos = candidatos[candidatos['Sexo'] == 'M']
+                    elif "Frente Templo (F)" in vaga: candidatos = candidatos[candidatos['Sexo'] == 'F']
                     
-                    # Ordenação por quem trabalhou menos no mês
                     candidatos = candidatos.sort_values(by='escalas_no_mes')
 
                     if not candidatos.empty:
@@ -65,29 +108,27 @@ for data in datas:
                     else:
                         dia_escala[vaga] = "FALTA PESSOAL"
 
-                # Santa Ceia (2H + 2M dos já escalados, exceto Portaria 1)
+                # Santa Ceia
                 if data_atual == data_ceia:
-                    aptos_ceia = [m for m in escalados_no_dia.keys() if m != dia_escala.get("Portaria 1 (Rua)")]
-                    # Aplica restrições de função específicas para Ceia
-                    for _, rest in df_restricoes.iterrows():
-                        if rest['Função Proibida'] == "Santa Ceia":
-                            aptos_ceia = [m for m in aptos_ceia if m != rest['Membro']]
-                    
-                    homens_ceia = [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'M'][:2]
-                    mulheres_ceia = [m for m in aptos_ceia if escalados_no_dia[m]['Sexo'] == 'F'][:2]
-                    dia_escala["Servir Santa Ceia"] = ", ".join(homens_ceia + mulheres_ceia)
+                    aptos = [m for m in escalados_no_dia.keys() if m != dia_escala.get("Portaria 1 (Rua)")]
+                    h = [m for m in aptos if escalados_no_dia[m]['Sexo'] == 'M'][:2]
+                    f = [m for m in aptos if escalados_no_dia[m]['Sexo'] == 'F'][:2]
+                    dia_escala["Servir Santa Ceia"] = ", ".join(h + f)
                 
-                # Abertura (Prioriza quem já está no templo, exceto Portaria 1)
-                c_abertura = candidatos_dia[(candidatos_dia['Abertura'] == "SIM") & (candidatos_dia['Nome'] != dia_escala.get("Portaria 1 (Rua)"))]
-                for _, rest in df_restricoes.iterrows():
-                    if rest['Função Proibida'] == "Abertura":
-                        c_abertura = c_abertura[c_abertura['Nome'] != rest['Membro']]
-                
-                ja_no_templo = [n for n in escalados_no_dia.keys() if n in c_abertura['Nome'].values]
-                if ja_no_templo:
-                    dia_escala["Abertura"] = ja_no_templo[0]
-                else:
-                    sobras = c_abertura[~c_abertura['Nome'].isin(escalados_no_dia.keys())]
-                    dia_escala["Abertura"] = sobras.iloc[0]['Nome'] if not sobras.empty else "---"
+                # Abertura
+                c_ab = candidatos_dia[(candidatos_dia['Abertura'] == "SIM") & (candidatos_dia['Nome'] != dia_escala.get("Portaria 1 (Rua)"))]
+                ja_no_t = [n for n in escalados_no_dia.keys() if n in c_ab['Nome'].values]
+                dia_escala["Abertura"] = ja_no_t[0] if ja_no_t else (c_ab[~c_ab['Nome'].isin(escalados_no_dia.keys())].iloc[0]['Nome'] if not c_ab[~c_ab['Nome'].isin(escalados_no_dia.keys())].empty else "---")
                 
                 escala_final.append(dia_escala)
+
+        df_res = pd.DataFrame(escala_final)
+        st.subheader(f"Escala Gerada")
+        st.dataframe(df_res, use_container_width=True)
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_res.to_excel(writer, index=False, sheet_name='Escala')
+        st.download_button(label="📥 Baixar Excel", data=output.getvalue(), file_name=f"escala_{mes}_{ano}.xlsx")
+else:
+    st.info("Por favor, suba o arquivo CSV para começar.")
