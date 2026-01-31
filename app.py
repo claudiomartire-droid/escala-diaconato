@@ -5,17 +5,18 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.8", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V6.9", layout="wide")
 
-# Inicialização segura do estado
+# Inicialização de estado limpa e tipada
 if 'escala_generated_df' not in st.session_state:
     st.session_state.escala_generated_df = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 if 'df_ausencias' not in st.session_state:
+    # Criamos o DataFrame garantindo apenas as 3 colunas desejadas
     st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.8)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 6.9)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -73,7 +74,7 @@ if arquivo_carregado:
             if restr and restr.lower() != 'nan':
                 regras_funcao.append({"Membro": row['Nome'], "Restrição": restr})
 
-    # --- EXIBIÇÃO DAS TABS (MOVIDO PARA CIMA PARA GARANTIR VISIBILIDADE) ---
+    # Abas de Conferência
     st.subheader("📋 Conferência de Regras")
     t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Ceia"])
     with t1: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
@@ -93,34 +94,30 @@ if arquivo_carregado:
     data_fim_mes = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
     datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. FÉRIAS / AUSÊNCIAS (PROTEGIDO) ---
+    # --- 3. FÉRIAS / AUSÊNCIAS (LIMPO V6.9) ---
     st.sidebar.header("3. Férias / Ausências")
     
-    try:
-        # Força conversão de tipos para evitar o erro de compatibilidade
-        st.session_state.df_ausencias["Início"] = pd.to_datetime(st.session_state.df_ausencias["Início"]).dt.date
-        st.session_state.df_ausencias["Fim"] = pd.to_datetime(st.session_state.df_ausencias["Fim"]).dt.date
-    except:
-        pass
+    # Garantimos que o DF tem apenas as colunas necessárias antes de exibir
+    df_aus_limpo = st.session_state.df_ausencias[["Membro", "Início", "Fim"]].copy()
 
     try:
         edit_ausencias = st.sidebar.data_editor(
-            st.session_state.df_ausencias,
+            df_aus_limpo,
             num_rows="dynamic",
+            hide_index=True, # Remove a coluna de índice que não faz sentido
             column_config={
-                "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True),
+                "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True, width="medium"),
                 "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
                 "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=False),
             },
-            key="ausencias_v68"
+            key="ausencias_v69"
         )
         st.session_state.df_ausencias = edit_ausencias
-    except Exception as e:
-        st.sidebar.error("Erro no editor de ausências. Limpando dados temporários...")
+    except:
         st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
     # --- MOTOR DE GERAÇÃO ---
-    if st.sidebar.button("Gerar Escala e Atualizar Histórico"):
+    if st.sidebar.button("Gerar Escala"):
         datas_mes = pd.date_range(data_ini_mes, data_fim_mes)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
@@ -143,6 +140,10 @@ if arquivo_carregado:
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']):
                         d_i = aus['Início']
                         d_f = aus['Fim'] if pd.notna(aus['Fim']) else d_i
+                        # Conversão segura
+                        if not isinstance(d_i, date): d_i = pd.to_datetime(d_i).date()
+                        if not isinstance(d_f, date): d_f = pd.to_datetime(d_f).date()
+                        
                         if d_i <= data_atual <= d_f:
                             cands = cands[cands['Nome'] != aus['Membro']]
 
@@ -157,11 +158,9 @@ if arquivo_carregado:
                     v_cands = cands[~cands['Nome'].isin(escalados_dia)]
                     if "M" in v or "Rua" in v: v_cands = v_cands[v_cands['Sexo'] == 'M']
                     if "(F)" in v: v_cands = v_cands[v_cands['Sexo'] == 'F']
-                    
                     for r in regras_duplas:
                         if r['Membro'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Evitar']]
                         if r['Evitar'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Membro']]
-                    
                     for rf in regras_funcao:
                         lista_res = [item.strip().lower() for item in rf['Restrição'].split(',')]
                         if any(termo in v.lower() for termo in lista_res if termo != ""):
@@ -187,7 +186,7 @@ if arquivo_carregado:
         st.session_state.escala_generated_df = pd.DataFrame(escala_final)
         st.session_state.df_memoria = df_membros[['Nome', 'historico_ceia']]
 
-    # --- EXIBIÇÃO RESULTADOS ---
+    # --- RESULTADOS ---
     if st.session_state.escala_generated_df is not None:
         st.subheader(f"🗓️ Escala Gerada")
         st.dataframe(st.session_state.escala_generated_df, use_container_width=True)
@@ -211,7 +210,7 @@ if arquivo_carregado:
                     elif "(Dom)" in d_cell: fmt = f_d
                     for c_idx in range(len(df_ex.columns)): ws.write(r_idx+1, c_idx, df_ex.iloc[r_idx, c_idx], fmt)
                 ws.set_column(0, 15, 25)
-            st.download_button("📥 Excel Colorido", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
+            st.download_button("📥 Excel", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
         
         with c2:
             df_img = st.session_state.escala_generated_df.fillna("---").copy()
@@ -228,11 +227,11 @@ if arquivo_carregado:
                     elif "(Sáb)" in dt: cell.set_facecolor('#F2F2F2')
                     elif "(Dom)" in dt: cell.set_facecolor('#FFF2CC')
             buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
-            st.download_button("📸 Imagem WhatsApp", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
+            st.download_button("📸 Imagem", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
         
         with c3:
             out_h = io.BytesIO()
             st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Baixar Histórico Atualizado", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
+            st.download_button("💾 Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
 
 else: st.info("Suba o arquivo membros_master.csv para começar.")
