@@ -3,17 +3,16 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import io
 import matplotlib.pyplot as plt
-import textwrap  # Necessário para quebrar o texto
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V5.9.3", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.9.4", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 5.9.3)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.9.4)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -39,6 +38,7 @@ if arquivo_carregado:
     df_membros['Nome'] = df_membros['Nome'].astype(str).str.strip()
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
+    # Processamento de Ranking Ceia
     contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
@@ -51,7 +51,7 @@ if arquivo_carregado:
             except: continue
     df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia)
 
-    # Processamento de Regras
+    # --- PROCESSAMENTO DE REGRAS PARA EXIBIÇÃO ---
     regras_duplas = []
     col_dupla = [c for c in df_membros.columns if 'Nao_Escalar_Com' in c]
     if col_dupla:
@@ -67,6 +67,18 @@ if arquivo_carregado:
             restr = str(row[col_funcao[0]]).strip()
             if restr and restr.lower() != 'nan':
                 regras_funcao.append({"Membro": row['Nome'], "Restrição": restr})
+
+    # --- TABS DE CONFERÊNCIA (RESTAURADAS) ---
+    st.subheader("📋 Conferência de Regras e Equidade")
+    t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Santa Ceia"])
+    with t1:
+        if regras_duplas: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
+        else: st.info("Nenhuma regra de dupla encontrada.")
+    with t2:
+        if regras_funcao: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
+        else: st.info("Nenhuma restrição de função encontrada.")
+    with t3:
+        st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values('historico_ceia'), use_container_width=True)
 
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
@@ -154,7 +166,6 @@ if arquivo_carregado:
                         escalados_dia.append(esc_ab)
 
                 if data_atual == data_ceia:
-                    # Substituindo vírgula por quebra de linha para a imagem
                     dia_escala["Santa Ceia"] = "\n".join(escalados_dia[:4])
                 
                 escala_final.append(dia_escala)
@@ -163,10 +174,11 @@ if arquivo_carregado:
         st.session_state.escala_gerada = pd.DataFrame(escala_final)
         st.session_state.df_memoria = df_membros[['Nome', 'historico_ceia']]
 
-    # --- DOWNLOADS ---
+    # --- DOWNLOADS E RENDERIZAÇÃO ---
     if st.session_state.escala_gerada is not None:
-        st.subheader(f"🗓️ Escala - {nome_mes_sel} {ano_sel}")
+        st.subheader(f"🗓️ Escala Gerada - {nome_mes_sel} {ano_sel}")
         st.dataframe(st.session_state.escala_gerada, use_container_width=True)
+        
         c1, c2, c3 = st.columns(3)
         with c1:
             output = io.BytesIO()
@@ -177,47 +189,37 @@ if arquivo_carregado:
                 f_h = wb.add_format({'bold':True,'fg_color':'#1F4E78','font_color':'white','border':1,'align':'center','valign':'vcenter'})
                 for col_num, val in enumerate(df_ex.columns.values): ws.write(0, col_num, val, f_h)
                 ws.set_column(0, 15, 22)
-            st.download_button("📥 Baixar Excel", output.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.xlsx")
+            st.download_button("📥 Excel Formatado", output.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.xlsx")
         
         with c2:
-            # --- LÓGICA DE IMAGEM MELHORADA (V5.9.3) ---
+            # --- AJUSTE DE IMAGEM V5.9.4 ---
             df_img = st.session_state.escala_gerada.fillna("---").copy()
-            
-            # Altura dinâmica: se houver Santa Ceia, a tabela precisa ser mais alta
-            row_height_factor = 3.5 if "Santa Ceia" in df_img.columns else 2.5
-            fig, ax = plt.subplots(figsize=(22, len(df_img) * 0.9 + 2))
+            # Altura generosa para evitar sobreposição (4.5 de escala vertical)
+            fig, ax = plt.subplots(figsize=(24, len(df_img) * 1.2 + 2))
             ax.axis('off')
             
-            tab = ax.table(
-                cellText=df_img.values, 
-                colLabels=df_img.columns, 
-                loc='center', 
-                cellLoc='center', 
-                colColours=['#1F4E78']*len(df_img.columns)
-            )
-            
+            tab = ax.table(cellText=df_img.values, colLabels=df_img.columns, loc='center', cellLoc='center', colColours=['#1F4E78']*len(df_img.columns))
             tab.auto_set_font_size(False)
-            tab.set_fontsize(10)
-            tab.scale(1.2, row_height_factor) # Aumenta a altura das células drasticamente
+            tab.set_fontsize(11)
+            tab.scale(1.2, 4.5) # Escala vertical aumentada para 4.5
             
-            # Estilizar cabeçalho e quebrar texto longo
             for (i, j), cell in tab.get_celld().items():
+                cell.set_edgecolor('#DDDDDD')
                 if i == 0:
                     cell.set_text_props(color='white', weight='bold')
                 else:
-                    # Se for a coluna de Santa Ceia ou se o texto for muito longo, garantir que não corte
-                    cell.get_text().set_verticalalignment('center')
-                    # Pinta a linha da Santa Ceia
                     d_txt = df_img.iloc[i-1, 0]
                     if data_ceia.strftime('%d/%m/%Y') in d_txt:
                         cell.set_facecolor('#D9E1F2')
-
+                    # Adiciona preenchimento interno para o texto não encostar nas linhas
+                    cell.set_height(cell.get_height()) 
+            
             buf = io.BytesIO()
             plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
-            st.download_button("📸 Baixar Imagem (Completa)", buf.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.png")
+            st.download_button("📸 Imagem WhatsApp (HD)", buf.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.png")
         
         with c3:
             out_h = io.BytesIO()
             st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Baixar Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}_{ano_sel}.csv")
-else: st.info("Suba o arquivo master.")
+            st.download_button("💾 Baixar Histórico Atualizado", out_h.getvalue(), f"historico_{nome_mes_sel}_{ano_sel}.csv")
+else: st.info("Suba o arquivo membros_master.csv para começar.")
