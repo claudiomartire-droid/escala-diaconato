@@ -5,18 +5,17 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.9", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V7.0", layout="wide")
 
-# Inicialização de estado limpa e tipada
+# Inicialização de estado robusta
 if 'escala_generated_df' not in st.session_state:
     st.session_state.escala_generated_df = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 if 'df_ausencias' not in st.session_state:
-    # Criamos o DataFrame garantindo apenas as 3 colunas desejadas
     st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.9)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 7.0)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -57,7 +56,7 @@ if arquivo_carregado:
             except: continue
     df_membros['historico_ceia'] = df_membros['Nome'].map(contagem_ceia).fillna(0)
 
-    # Captura de Regras
+    # Captura de Regras de Impedimento e Função
     regras_duplas = []
     col_dupla = [c for c in df_membros.columns if 'Nao_Escalar_Com' in c]
     if col_dupla:
@@ -94,29 +93,29 @@ if arquivo_carregado:
     data_fim_mes = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
     datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. FÉRIAS / AUSÊNCIAS (LIMPO V6.9) ---
+    # --- 3. FÉRIAS / AUSÊNCIAS (CORREÇÃO DE FALHA V7.0) ---
     st.sidebar.header("3. Férias / Ausências")
     
-    # Garantimos que o DF tem apenas as colunas necessárias antes de exibir
-    df_aus_limpo = st.session_state.df_ausencias[["Membro", "Início", "Fim"]].copy()
-
     try:
+        # Garantimos que o DF visualizado tenha apenas colunas válidas
+        df_display = st.session_state.df_ausencias[["Membro", "Início", "Fim"]].copy()
+        
         edit_ausencias = st.sidebar.data_editor(
-            df_aus_limpo,
+            df_display,
             num_rows="dynamic",
-            hide_index=True, # Remove a coluna de índice que não faz sentido
+            hide_index=True,
             column_config={
-                "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True, width="medium"),
-                "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
+                "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=False),
+                "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=False),
                 "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=False),
             },
-            key="ausencias_v69"
+            key="ausencias_v7"
         )
         st.session_state.df_ausencias = edit_ausencias
     except:
         st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-    # --- MOTOR DE GERAÇÃO ---
+    # --- MOTOR DE GERAÇÃO COM FILTRO ANTI-ERRO ---
     if st.sidebar.button("Gerar Escala"):
         datas_mes = pd.date_range(data_ini_mes, data_fim_mes)
         escala_final = []
@@ -135,17 +134,21 @@ if arquivo_carregado:
                 cands = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 cands = cands[~cands['Nome'].isin(membros_ultimo_culto)]
                 
-                # Filtro Ausências
+                # FILTRO DE AUSÊNCIAS (Ignora linhas vazias ou incompletas)
                 for _, aus in st.session_state.df_ausencias.iterrows():
+                    # Validação: Só processa se tiver Membro E Início preenchidos
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']):
                         d_i = aus['Início']
                         d_f = aus['Fim'] if pd.notna(aus['Fim']) else d_i
-                        # Conversão segura
-                        if not isinstance(d_i, date): d_i = pd.to_datetime(d_i).date()
-                        if not isinstance(d_f, date): d_f = pd.to_datetime(d_f).date()
                         
-                        if d_i <= data_atual <= d_f:
-                            cands = cands[cands['Nome'] != aus['Membro']]
+                        # Conversão defensiva para date
+                        try:
+                            if not isinstance(d_i, date): d_i = pd.to_datetime(d_i).date()
+                            if not isinstance(d_f, date): d_f = pd.to_datetime(d_f).date()
+                            if d_i <= data_atual <= d_f:
+                                cands = cands[cands['Nome'] != aus['Membro']]
+                        except:
+                            continue # Se a data for inválida, apenas ignora essa linha de ausência
 
                 cands['folga'] = cands['Nome'].map(ultima_escala).apply(lambda x: dia_idx - x)
                 dia_pt = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
@@ -158,6 +161,8 @@ if arquivo_carregado:
                     v_cands = cands[~cands['Nome'].isin(escalados_dia)]
                     if "M" in v or "Rua" in v: v_cands = v_cands[v_cands['Sexo'] == 'M']
                     if "(F)" in v: v_cands = v_cands[v_cands['Sexo'] == 'F']
+                    
+                    # Regras de Dupla e Função
                     for r in regras_duplas:
                         if r['Membro'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Evitar']]
                         if r['Evitar'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Membro']]
@@ -210,7 +215,7 @@ if arquivo_carregado:
                     elif "(Dom)" in d_cell: fmt = f_d
                     for c_idx in range(len(df_ex.columns)): ws.write(r_idx+1, c_idx, df_ex.iloc[r_idx, c_idx], fmt)
                 ws.set_column(0, 15, 25)
-            st.download_button("📥 Excel", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
+            st.download_button("📥 Baixar Excel", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
         
         with c2:
             df_img = st.session_state.escala_generated_df.fillna("---").copy()
@@ -227,11 +232,11 @@ if arquivo_carregado:
                     elif "(Sáb)" in dt: cell.set_facecolor('#F2F2F2')
                     elif "(Dom)" in dt: cell.set_facecolor('#FFF2CC')
             buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
-            st.download_button("📸 Imagem", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
+            st.download_button("📸 Baixar Imagem", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
         
         with c3:
             out_h = io.BytesIO()
             st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
+            st.download_button("💾 Baixar Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
 
 else: st.info("Suba o arquivo membros_master.csv para começar.")
