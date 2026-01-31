@@ -5,14 +5,17 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.5", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V6.6", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
+if 'df_ausencias' not in st.session_state:
+    # Inicializa com tipos definidos para evitar erro de compatibilidade
+    st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.5)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 6.6)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -40,7 +43,7 @@ if arquivo_carregado:
     df_membros['Nome'] = df_membros['Nome'].astype(str).str.strip()
     nomes_membros = sorted(df_membros['Nome'].unique().tolist())
     
-    # Processamento de Ranking Ceia
+    # Processamento de Ranking
     contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
@@ -89,29 +92,20 @@ if arquivo_carregado:
     data_fim_mes = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
     datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. FÉRIAS / AUSÊNCIAS (ATUALIZADO) ---
+    # --- 3. FÉRIAS / AUSÊNCIAS (FIXED V6.6) ---
     st.sidebar.header("3. Férias / Ausências")
     
-    if 'df_ausencias' not in st.session_state:
-        st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
-
-    # Lógica de preenchimento automático de data
+    # Editor sem tentativa de mutação direta para evitar o erro de API
     edit_ausencias = st.sidebar.data_editor(
         st.session_state.df_ausencias,
         num_rows="dynamic",
         column_config={
             "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True),
             "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
-            "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=True),
+            "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=False),
         },
-        key="ausencias_editor"
+        key="ausencias_editor_v6"
     )
-
-    # Aplica a regra de "Início = Fim" se o Fim estiver vazio
-    for i, row in edit_ausencias.iterrows():
-        if pd.notna(row['Início']) and pd.isna(row['Fim']):
-            edit_ausencias.at[i, 'Fim'] = row['Início']
-    
     st.session_state.df_ausencias = edit_ausencias
 
     # --- MOTOR DE GERAÇÃO ---
@@ -133,11 +127,17 @@ if arquivo_carregado:
                 cands = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 cands = cands[~cands['Nome'].isin(membros_ultimo_culto)]
                 
-                # Filtro Ausências
+                # Filtro Ausências com Lógica Inteligente (Início=Fim se vazio)
                 for _, aus in st.session_state.df_ausencias.iterrows():
-                    if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
-                        d_i = aus['Início'] if isinstance(aus['Início'], date) else pd.to_datetime(aus['Início']).date()
-                        d_f = aus['Fim'] if isinstance(aus['Fim'], date) else pd.to_datetime(aus['Fim']).date()
+                    if pd.notna(aus['Membro']) and pd.notna(aus['Início']):
+                        d_i = aus['Início']
+                        # Se Fim estiver vazio, assume o próprio dia de Início
+                        d_f = aus['Fim'] if pd.notna(aus['Fim']) else d_i
+                        
+                        # Normalização para date
+                        if not isinstance(d_i, date): d_i = pd.to_datetime(d_i).date()
+                        if not isinstance(d_f, date): d_f = pd.to_datetime(d_f).date()
+                        
                         if d_i <= data_atual <= d_f:
                             cands = cands[cands['Nome'] != aus['Membro']]
 
@@ -152,11 +152,9 @@ if arquivo_carregado:
                     v_cands = cands[~cands['Nome'].isin(escalados_dia)]
                     if "M" in v or "Rua" in v: v_cands = v_cands[v_cands['Sexo'] == 'M']
                     if "(F)" in v: v_cands = v_cands[v_cands['Sexo'] == 'F']
-                    
                     for r in regras_duplas:
                         if r['Membro'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Evitar']]
                         if r['Evitar'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Membro']]
-                    
                     for rf in regras_funcao:
                         lista_res = [item.strip().lower() for item in rf['Restrição'].split(',')]
                         for termo in lista_res:
