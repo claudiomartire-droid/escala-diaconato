@@ -3,16 +3,17 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import io
 import matplotlib.pyplot as plt
+import textwrap  # Necessário para quebrar o texto
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.0", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V5.9.3", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.0)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 5.9.3)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -23,7 +24,7 @@ def obter_primeiro_domingo(ano, mes):
 LISTA_MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
                 "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
-# --- 1. CARGA DE DADOS E CONFERÊNCIA ---
+# --- 1. CARGA DE DADOS ---
 st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
 arquivos_historicos = st.sidebar.file_uploader("Suba históricos antigos", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -38,7 +39,6 @@ if arquivo_carregado:
     df_membros['Nome'] = df_membros['Nome'].astype(str).str.strip()
     nomes_membros = sorted(df_membros['Nome'].tolist())
     
-    # Ranking Ceia
     contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
@@ -68,17 +68,11 @@ if arquivo_carregado:
             if restr and restr.lower() != 'nan':
                 regras_funcao.append({"Membro": row['Nome'], "Restrição": restr})
 
-    st.subheader("📋 Conferência de Regras")
-    t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Ceia"])
-    with t1: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
-    with t2: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
-    with t3: st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values('historico_ceia'), use_container_width=True)
-
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
     hoje = datetime.now()
-    ano_sel = st.sidebar.number_input("Ano", 2025, 2030, hoje.year)
-    mes_idx = st.sidebar.selectbox("Mês", range(1, 13), index=(hoje.month-1), format_func=lambda x: LISTA_MESES[x-1])
+    ano_sel = st.sidebar.number_input("Ano", 2025, 2030, hoje.year + (1 if hoje.month == 12 else 0))
+    mes_idx = st.sidebar.selectbox("Mês", range(1, 13), index=(hoje.month % 12), format_func=lambda x: LISTA_MESES[x-1])
     nome_mes_sel = LISTA_MESES[mes_idx-1]
     dias_semana = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano_sel, mes_idx))
@@ -87,12 +81,12 @@ if arquivo_carregado:
     data_fim = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
     datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini, data_fim), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. AUSÊNCIAS ---
+    # --- 3. FÉRIAS / AUSÊNCIAS ---
     st.sidebar.header("3. Férias / Ausências")
     ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]), num_rows="dynamic")
 
     # --- MOTOR DE GERAÇÃO ---
-    if st.sidebar.button("Gerar Escala Colorida V6.0"):
+    if st.sidebar.button("Gerar Escala Atualizada"):
         datas_mes = pd.date_range(data_ini, data_fim)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
@@ -160,6 +154,7 @@ if arquivo_carregado:
                         escalados_dia.append(esc_ab)
 
                 if data_atual == data_ceia:
+                    # Substituindo vírgula por quebra de linha para a imagem
                     dia_escala["Santa Ceia"] = "\n".join(escalados_dia[:4])
                 
                 escala_final.append(dia_escala)
@@ -168,64 +163,61 @@ if arquivo_carregado:
         st.session_state.escala_gerada = pd.DataFrame(escala_final)
         st.session_state.df_memoria = df_membros[['Nome', 'historico_ceia']]
 
-    # --- DOWNLOADS E RENDERIZAÇÃO ---
+    # --- DOWNLOADS ---
     if st.session_state.escala_gerada is not None:
-        st.subheader(f"🗓️ Escala Final - {nome_mes_sel}")
+        st.subheader(f"🗓️ Escala - {nome_mes_sel} {ano_sel}")
         st.dataframe(st.session_state.escala_gerada, use_container_width=True)
-        
         c1, c2, c3 = st.columns(3)
         with c1:
-            # EXCEL COLORIDO
             output = io.BytesIO()
             df_ex = st.session_state.escala_gerada.fillna("---").astype(str)
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_ex.to_excel(writer, index=False, sheet_name='Escala')
                 wb, ws = writer.book, writer.sheets['Escala']
-                
-                # Definição de Cores
-                fmt_h = wb.add_format({'bold':True,'fg_color':'#1F4E78','font_color':'white','border':1,'align':'center'})
-                fmt_qua = wb.add_format({'bg_color':'#EBF1DE','border':1,'align':'center'})
-                fmt_sab = wb.add_format({'bg_color':'#F2F2F2','border':1,'align':'center'})
-                fmt_dom = wb.add_format({'bg_color':'#FFF2CC','border':1,'align':'center'})
-                fmt_ceia = wb.add_format({'bg_color':'#D9E1F2','border':1,'bold':True,'align':'center'})
-                
-                for col_num, val in enumerate(df_ex.columns.values): ws.write(0, col_num, val, fmt_h)
-                for r_idx in range(len(df_ex)):
-                    data_cell = df_ex.iloc[r_idx, 0]
-                    fmt = wb.add_format({'border':1})
-                    if data_ceia.strftime('%d/%m/%Y') in data_cell: fmt = fmt_ceia
-                    elif "(Qua)" in data_cell: fmt = fmt_qua
-                    elif "(Sáb)" in data_cell: fmt = fmt_sab
-                    elif "(Dom)" in data_cell: fmt = fmt_dom
-                    
-                    for c_idx in range(len(df_ex.columns)):
-                        ws.write(r_idx+1, c_idx, df_ex.iloc[r_idx, c_idx], fmt)
-                ws.set_column(0, 15, 25)
-            st.download_button("📥 Excel Colorido", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
+                f_h = wb.add_format({'bold':True,'fg_color':'#1F4E78','font_color':'white','border':1,'align':'center','valign':'vcenter'})
+                for col_num, val in enumerate(df_ex.columns.values): ws.write(0, col_num, val, f_h)
+                ws.set_column(0, 15, 22)
+            st.download_button("📥 Baixar Excel", output.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.xlsx")
         
         with c2:
-            # IMAGEM COLORIDA
+            # --- LÓGICA DE IMAGEM MELHORADA (V5.9.3) ---
             df_img = st.session_state.escala_gerada.fillna("---").copy()
-            fig, ax = plt.subplots(figsize=(24, len(df_img) * 1.5 + 2))
+            
+            # Altura dinâmica: se houver Santa Ceia, a tabela precisa ser mais alta
+            row_height_factor = 3.5 if "Santa Ceia" in df_img.columns else 2.5
+            fig, ax = plt.subplots(figsize=(22, len(df_img) * 0.9 + 2))
             ax.axis('off')
-            tab = ax.table(cellText=df_img.values, colLabels=df_img.columns, loc='center', cellLoc='center', colColours=['#1F4E78']*len(df_img.columns))
-            tab.auto_set_font_size(False); tab.set_fontsize(11); tab.scale(1.2, 5.0)
             
+            tab = ax.table(
+                cellText=df_img.values, 
+                colLabels=df_img.columns, 
+                loc='center', 
+                cellLoc='center', 
+                colColours=['#1F4E78']*len(df_img.columns)
+            )
+            
+            tab.auto_set_font_size(False)
+            tab.set_fontsize(10)
+            tab.scale(1.2, row_height_factor) # Aumenta a altura das células drasticamente
+            
+            # Estilizar cabeçalho e quebrar texto longo
             for (i, j), cell in tab.get_celld().items():
-                if i == 0: cell.set_text_props(color='white', weight='bold')
-                elif i > 0:
+                if i == 0:
+                    cell.set_text_props(color='white', weight='bold')
+                else:
+                    # Se for a coluna de Santa Ceia ou se o texto for muito longo, garantir que não corte
+                    cell.get_text().set_verticalalignment('center')
+                    # Pinta a linha da Santa Ceia
                     d_txt = df_img.iloc[i-1, 0]
-                    if data_ceia.strftime('%d/%m/%Y') in d_txt: cell.set_facecolor('#D9E1F2')
-                    elif "(Qua)" in d_txt: cell.set_facecolor('#EBF1DE')
-                    elif "(Sáb)" in d_txt: cell.set_facecolor('#F2F2F2')
-                    elif "(Dom)" in d_txt: cell.set_facecolor('#FFF2CC')
-            
+                    if data_ceia.strftime('%d/%m/%Y') in d_txt:
+                        cell.set_facecolor('#D9E1F2')
+
             buf = io.BytesIO()
             plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
-            st.download_button("📸 Imagem WhatsApp", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
+            st.download_button("📸 Baixar Imagem (Completa)", buf.getvalue(), f"Escala_{nome_mes_sel}_{ano_sel}.png")
         
         with c3:
             out_h = io.BytesIO()
             st.session_state.df_memoria.to_csv(out_h, index=False)
-            st.download_button("💾 Baixar Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
-else: st.info("Suba o arquivo master para começar.")
+            st.download_button("💾 Baixar Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}_{ano_sel}.csv")
+else: st.info("Suba o arquivo master.")
