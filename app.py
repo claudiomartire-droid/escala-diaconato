@@ -5,16 +5,17 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.7", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V6.8", layout="wide")
 
-if 'escala_gerada' not in st.session_state:
-    st.session_state.escala_gerada = None
+# Inicialização segura do estado
+if 'escala_generated_df' not in st.session_state:
+    st.session_state.escala_generated_df = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 if 'df_ausencias' not in st.session_state:
     st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.7)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 6.8)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -42,7 +43,7 @@ if arquivo_carregado:
     df_membros['Nome'] = df_membros['Nome'].astype(str).str.strip()
     nomes_membros = sorted(df_membros['Nome'].unique().tolist())
     
-    # Processamento de Ranking Ceia (Consolidado)
+    # Processamento de Ranking Ceia
     contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
@@ -72,6 +73,13 @@ if arquivo_carregado:
             if restr and restr.lower() != 'nan':
                 regras_funcao.append({"Membro": row['Nome'], "Restrição": restr})
 
+    # --- EXIBIÇÃO DAS TABS (MOVIDO PARA CIMA PARA GARANTIR VISIBILIDADE) ---
+    st.subheader("📋 Conferência de Regras")
+    t1, t2, t3 = st.tabs(["👥 Duplas Impedidas", "🚫 Restrições de Função", "🍷 Ranking Ceia"])
+    with t1: st.dataframe(pd.DataFrame(regras_duplas), use_container_width=True)
+    with t2: st.dataframe(pd.DataFrame(regras_funcao), use_container_width=True)
+    with t3: st.dataframe(df_membros[['Nome', 'historico_ceia']].sort_values('historico_ceia'), use_container_width=True)
+
     # --- 2. CONFIGURAÇÕES ---
     st.sidebar.header("2. Configurações")
     hoje = datetime.now()
@@ -85,28 +93,39 @@ if arquivo_carregado:
     data_fim_mes = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
     datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. FÉRIAS / AUSÊNCIAS ---
+    # --- 3. FÉRIAS / AUSÊNCIAS (PROTEGIDO) ---
     st.sidebar.header("3. Férias / Ausências")
-    edit_ausencias = st.sidebar.data_editor(
-        st.session_state.df_ausencias,
-        num_rows="dynamic",
-        column_config={
-            "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True),
-            "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
-            "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=False),
-        },
-        key="ausencias_v67"
-    )
-    st.session_state.df_ausencias = edit_ausencias
+    
+    try:
+        # Força conversão de tipos para evitar o erro de compatibilidade
+        st.session_state.df_ausencias["Início"] = pd.to_datetime(st.session_state.df_ausencias["Início"]).dt.date
+        st.session_state.df_ausencias["Fim"] = pd.to_datetime(st.session_state.df_ausencias["Fim"]).dt.date
+    except:
+        pass
 
-    # --- MOTOR DE GERAÇÃO V6.7 ---
+    try:
+        edit_ausencias = st.sidebar.data_editor(
+            st.session_state.df_ausencias,
+            num_rows="dynamic",
+            column_config={
+                "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True),
+                "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
+                "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=False),
+            },
+            key="ausencias_v68"
+        )
+        st.session_state.df_ausencias = edit_ausencias
+    except Exception as e:
+        st.sidebar.error("Erro no editor de ausências. Limpando dados temporários...")
+        st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
+
+    # --- MOTOR DE GERAÇÃO ---
     if st.sidebar.button("Gerar Escala e Atualizar Histórico"):
         datas_mes = pd.date_range(data_ini_mes, data_fim_mes)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
         ultima_escala = {nome: -10 for nome in nomes_membros} 
         membros_ultimo_culto = []
-        membros_ceia_contados = []
 
         for dia_idx, data in enumerate(datas_mes):
             data_atual = data.date()
@@ -119,7 +138,7 @@ if arquivo_carregado:
                 cands = df_membros[df_membros[nome_col_dia] != "NÃO"].copy()
                 cands = cands[~cands['Nome'].isin(membros_ultimo_culto)]
                 
-                # Filtro Ausências (Com Fallback Fim=Início)
+                # Filtro Ausências
                 for _, aus in st.session_state.df_ausencias.iterrows():
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']):
                         d_i = aus['Início']
@@ -156,24 +175,21 @@ if arquivo_carregado:
                         df_membros.loc[df_membros['Nome'] == esc, 'escalas_no_mes'] += 1
                         ultima_escala[esc] = dia_idx
 
-                # Santa Ceia e Atualização do Histórico
                 if data_atual == data_ceia:
-                    membros_ceia_contados = escalados_dia[:4] # Os 4 primeiros são os da Ceia
-                    dia_escala["Santa Ceia"] = "\n".join(membros_ceia_contados)
-                    # SOMA NO HISTÓRICO PARA O DOWNLOAD
-                    for m in membros_ceia_contados:
+                    membros_ceia = escalados_dia[:4]
+                    dia_escala["Santa Ceia"] = "\n".join(membros_ceia)
+                    for m in membros_ceia:
                         df_membros.loc[df_membros['Nome'] == m, 'historico_ceia'] += 1
                 
                 escala_final.append(dia_escala)
                 membros_ultimo_culto = escalados_dia
 
         st.session_state.escala_generated_df = pd.DataFrame(escala_final)
-        # Salva o DF de membros ATUALIZADO (com a nova ceia somada)
         st.session_state.df_memoria = df_membros[['Nome', 'historico_ceia']]
 
-    # --- RENDERIZAÇÃO E DOWNLOADS ---
-    if 'escala_generated_df' in st.session_state:
-        st.subheader(f"🗓️ Escala Gerada - {nome_mes_sel}")
+    # --- EXIBIÇÃO RESULTADOS ---
+    if st.session_state.escala_generated_df is not None:
+        st.subheader(f"🗓️ Escala Gerada")
         st.dataframe(st.session_state.escala_generated_df, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
@@ -215,9 +231,7 @@ if arquivo_carregado:
             st.download_button("📸 Imagem WhatsApp", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
         
         with c3:
-            # BOTÃO DE HISTÓRICO ATUALIZADO
             out_h = io.BytesIO()
-            # Garante que o CSV baixado contenha os valores atualizados do mês
             st.session_state.df_memoria.to_csv(out_h, index=False)
             st.download_button("💾 Baixar Histórico Atualizado", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
 
