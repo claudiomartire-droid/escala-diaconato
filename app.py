@@ -5,14 +5,14 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.3", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V6.4", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.3)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 6.4)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -30,7 +30,6 @@ arquivos_historicos = st.sidebar.file_uploader("Suba históricos antigos", type=
 
 if arquivo_carregado:
     try:
-        # Tenta ler com o separador ';' identificado no seu arquivo
         df_membros = pd.read_csv(arquivo_carregado, sep=';', engine='python', encoding='iso-8859-1')
     except:
         arquivo_carregado.seek(0)
@@ -92,8 +91,8 @@ if arquivo_carregado:
     st.sidebar.header("3. Férias / Ausências")
     ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]), num_rows="dynamic")
 
-    # --- MOTOR DE GERAÇÃO V6.3 ---
-    if st.sidebar.button("Gerar Escala Atualizada"):
+    # --- MOTOR DE GERAÇÃO V6.4 ---
+    if st.sidebar.button("Gerar Escala"):
         datas_mes = pd.date_range(data_ini, data_fim)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
@@ -136,9 +135,8 @@ if arquivo_carregado:
                         if r['Membro'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Evitar']]
                         if r['Evitar'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Membro']]
                     
-                    # REGRAS DE RESTRIÇÃO DE FUNÇÃO (MELHORADA V6.3)
+                    # REGRAS DE RESTRIÇÃO DE FUNÇÃO (Múltiplos Itens)
                     for rf in regras_funcao:
-                        # Separa restrições por vírgula e limpa espaços
                         lista_res = [item.strip().lower() for item in rf['Restrição'].split(',')]
                         for termo in lista_res:
                             if termo != "" and termo in v.lower():
@@ -217,4 +215,25 @@ if arquivo_carregado:
             fig, ax = plt.subplots(figsize=(24, len(df_img) * 1.5 + 2))
             ax.axis('off')
             tab = ax.table(cellText=df_img.values, colLabels=df_img.columns, loc='center', cellLoc='center', colColours=['#1F4E78']*len(df_img.columns))
-            tab.auto_set_font_size(False); tab.
+            tab.auto_set_font_size(False)
+            tab.set_fontsize(11)
+            tab.scale(1.2, 5.5)
+            
+            for (i, j), cell in tab.get_celld().items():
+                if i == 0: cell.set_text_props(color='white', weight='bold')
+                elif i > 0:
+                    dt = df_img.iloc[i-1, 0]
+                    if data_ceia.strftime('%d/%m/%Y') in dt: cell.set_facecolor('#D9E1F2')
+                    elif "(Qua)" in dt: cell.set_facecolor('#EBF1DE')
+                    elif "(Sáb)" in dt: cell.set_facecolor('#F2F2F2')
+                    elif "(Dom)" in dt: cell.set_facecolor('#FFF2CC')
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
+            st.download_button("📸 Imagem WhatsApp", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
+        
+        with c3:
+            out_h = io.BytesIO()
+            st.session_state.df_memoria.to_csv(out_h, index=False)
+            st.download_button("💾 Baixar Histórico", out_h.getvalue(), f"historico_{nome_mes_sel}.csv")
+else: st.info("Suba o arquivo membros_master.csv para começar.")
