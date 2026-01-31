@@ -5,14 +5,14 @@ import io
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Escala Diaconato V6.4", layout="wide")
+st.set_page_config(page_title="Gerador de Escala Diaconato V6.5", layout="wide")
 
 if 'escala_gerada' not in st.session_state:
     st.session_state.escala_gerada = None
 if 'df_memoria' not in st.session_state:
     st.session_state.df_memoria = None
 
-st.title("⛪ Gerador de Escala de Diaconato (Versão 6.4)")
+st.title("⛪ Gerador de Escala de Diaconato (Versão 6.5)")
 
 # --- FUNÇÕES DE APOIO ---
 def obter_primeiro_domingo(ano, mes):
@@ -23,10 +23,12 @@ def obter_primeiro_domingo(ano, mes):
 LISTA_MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
                 "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
-# --- 1. CARGA DE DADOS E CONFERÊNCIA ---
+# --- 1. CARGA DE DADOS ---
 st.sidebar.header("1. Base de Dados")
 arquivo_carregado = st.sidebar.file_uploader("Suba o arquivo membros_master.csv", type="csv")
 arquivos_historicos = st.sidebar.file_uploader("Suba históricos antigos", type=["csv", "xlsx"], accept_multiple_files=True)
+
+nomes_membros = []
 
 if arquivo_carregado:
     try:
@@ -36,9 +38,9 @@ if arquivo_carregado:
         df_membros = pd.read_csv(arquivo_carregado, sep=None, engine='python', encoding='utf-8-sig')
 
     df_membros['Nome'] = df_membros['Nome'].astype(str).str.strip()
-    nomes_membros = sorted(df_membros['Nome'].tolist())
+    nomes_membros = sorted(df_membros['Nome'].unique().tolist())
     
-    # Processamento de Equidade (Santa Ceia)
+    # Processamento de Ranking Ceia
     contagem_ceia = {nome: 0 for nome in nomes_membros}
     if arquivos_historicos:
         for arq in arquivos_historicos:
@@ -83,17 +85,38 @@ if arquivo_carregado:
     dias_semana = st.sidebar.multiselect("Dias de Culto", ["Quarta_Feira", "Sabado", "Domingo"], default=["Quarta_Feira", "Sabado", "Domingo"])
     data_ceia = st.sidebar.date_input("Data da Santa Ceia", value=obter_primeiro_domingo(ano_sel, mes_idx))
     
-    data_ini = date(ano_sel, mes_idx, 1)
-    data_fim = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
-    datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini, data_fim), format_func=lambda x: x.strftime('%d/%m/%Y'))
+    data_ini_mes = date(ano_sel, mes_idx, 1)
+    data_fim_mes = (date(ano_sel + (1 if mes_idx==12 else 0), 1 if mes_idx==12 else mes_idx+1, 1) - timedelta(days=1))
+    datas_excluir = st.sidebar.multiselect("Excluir Datas", options=pd.date_range(data_ini_mes, data_fim_mes), format_func=lambda x: x.strftime('%d/%m/%Y'))
 
-    # --- 3. AUSÊNCIAS ---
+    # --- 3. FÉRIAS / AUSÊNCIAS (ATUALIZADO) ---
     st.sidebar.header("3. Férias / Ausências")
-    ausencias = st.sidebar.data_editor(pd.DataFrame(columns=["Membro", "Início", "Fim"]), num_rows="dynamic")
+    
+    if 'df_ausencias' not in st.session_state:
+        st.session_state.df_ausencias = pd.DataFrame(columns=["Membro", "Início", "Fim"])
 
-    # --- MOTOR DE GERAÇÃO V6.4 ---
-    if st.sidebar.button("Gerar Escala"):
-        datas_mes = pd.date_range(data_ini, data_fim)
+    # Lógica de preenchimento automático de data
+    edit_ausencias = st.sidebar.data_editor(
+        st.session_state.df_ausencias,
+        num_rows="dynamic",
+        column_config={
+            "Membro": st.column_config.SelectboxColumn("Membro", options=nomes_membros, required=True),
+            "Início": st.column_config.DateColumn("Início", format="DD/MM/YYYY", required=True),
+            "Fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY", required=True),
+        },
+        key="ausencias_editor"
+    )
+
+    # Aplica a regra de "Início = Fim" se o Fim estiver vazio
+    for i, row in edit_ausencias.iterrows():
+        if pd.notna(row['Início']) and pd.isna(row['Fim']):
+            edit_ausencias.at[i, 'Fim'] = row['Início']
+    
+    st.session_state.df_ausencias = edit_ausencias
+
+    # --- MOTOR DE GERAÇÃO ---
+    if st.sidebar.button("Gerar Escala Atualizada"):
+        datas_mes = pd.date_range(data_ini_mes, data_fim_mes)
         escala_final = []
         df_membros['escalas_no_mes'] = 0.0
         ultima_escala = {nome: -10 for nome in nomes_membros} 
@@ -111,11 +134,11 @@ if arquivo_carregado:
                 cands = cands[~cands['Nome'].isin(membros_ultimo_culto)]
                 
                 # Filtro Ausências
-                for _, aus in ausencias.iterrows():
+                for _, aus in st.session_state.df_ausencias.iterrows():
                     if pd.notna(aus['Membro']) and pd.notna(aus['Início']) and pd.notna(aus['Fim']):
-                        d_ini = aus['Início'] if isinstance(aus['Início'], date) else pd.to_datetime(aus['Início']).date()
-                        d_fim = aus['Fim'] if isinstance(aus['Fim'], date) else pd.to_datetime(aus['Fim']).date()
-                        if d_ini <= data_atual <= d_fim:
+                        d_i = aus['Início'] if isinstance(aus['Início'], date) else pd.to_datetime(aus['Início']).date()
+                        d_f = aus['Fim'] if isinstance(aus['Fim'], date) else pd.to_datetime(aus['Fim']).date()
+                        if d_i <= data_atual <= d_f:
                             cands = cands[cands['Nome'] != aus['Membro']]
 
                 cands['folga'] = cands['Nome'].map(ultima_escala).apply(lambda x: dia_idx - x)
@@ -130,12 +153,10 @@ if arquivo_carregado:
                     if "M" in v or "Rua" in v: v_cands = v_cands[v_cands['Sexo'] == 'M']
                     if "(F)" in v: v_cands = v_cands[v_cands['Sexo'] == 'F']
                     
-                    # REGRAS DE DUPLAS
                     for r in regras_duplas:
                         if r['Membro'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Evitar']]
                         if r['Evitar'] in escalados_dia: v_cands = v_cands[v_cands['Nome'] != r['Membro']]
                     
-                    # REGRAS DE RESTRIÇÃO DE FUNÇÃO (Múltiplos Itens)
                     for rf in regras_funcao:
                         lista_res = [item.strip().lower() for item in rf['Restrição'].split(',')]
                         for termo in lista_res:
@@ -154,8 +175,6 @@ if arquivo_carregado:
                 # Abertura
                 p1 = dia_escala.get("Portaria 1 (Rua)")
                 aptos_ab = cands[(cands['Abertura'] == "SIM") & (cands['Nome'] != p1)].copy()
-                
-                # Validação de restrição na Abertura
                 for rf in regras_funcao:
                     lista_res = [item.strip().lower() for item in rf['Restrição'].split(',')]
                     if any(t in "abertura" for t in lista_res if t != ""):
@@ -196,7 +215,6 @@ if arquivo_carregado:
                 wb, ws = writer.book, writer.sheets['Escala']
                 f_h = wb.add_format({'bold':True,'fg_color':'#1F4E78','font_color':'white','border':1,'align':'center'})
                 f_q, f_s, f_d, f_c = wb.add_format({'bg_color':'#EBF1DE','border':1}), wb.add_format({'bg_color':'#F2F2F2','border':1}), wb.add_format({'bg_color':'#FFF2CC','border':1}), wb.add_format({'bg_color':'#D9E1F2','border':1,'bold':True})
-                
                 for col_num, val in enumerate(df_ex.columns.values): ws.write(0, col_num, val, f_h)
                 for r_idx in range(len(df_ex)):
                     d_cell = df_ex.iloc[r_idx, 0]
@@ -205,8 +223,7 @@ if arquivo_carregado:
                     elif "(Qua)" in d_cell: fmt = f_q
                     elif "(Sáb)" in d_cell: fmt = f_s
                     elif "(Dom)" in d_cell: fmt = f_d
-                    for c_idx in range(len(df_ex.columns)):
-                        ws.write(r_idx+1, c_idx, df_ex.iloc[r_idx, c_idx], fmt)
+                    for c_idx in range(len(df_ex.columns)): ws.write(r_idx+1, c_idx, df_ex.iloc[r_idx, c_idx], fmt)
                 ws.set_column(0, 15, 25)
             st.download_button("📥 Excel Colorido", output.getvalue(), f"Escala_{nome_mes_sel}.xlsx")
         
@@ -215,10 +232,7 @@ if arquivo_carregado:
             fig, ax = plt.subplots(figsize=(24, len(df_img) * 1.5 + 2))
             ax.axis('off')
             tab = ax.table(cellText=df_img.values, colLabels=df_img.columns, loc='center', cellLoc='center', colColours=['#1F4E78']*len(df_img.columns))
-            tab.auto_set_font_size(False)
-            tab.set_fontsize(11)
-            tab.scale(1.2, 5.5)
-            
+            tab.auto_set_font_size(False); tab.set_fontsize(11); tab.scale(1.2, 5.5)
             for (i, j), cell in tab.get_celld().items():
                 if i == 0: cell.set_text_props(color='white', weight='bold')
                 elif i > 0:
@@ -227,9 +241,7 @@ if arquivo_carregado:
                     elif "(Qua)" in dt: cell.set_facecolor('#EBF1DE')
                     elif "(Sáb)" in dt: cell.set_facecolor('#F2F2F2')
                     elif "(Dom)" in dt: cell.set_facecolor('#FFF2CC')
-            
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
+            buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', dpi=300)
             st.download_button("📸 Imagem WhatsApp", buf.getvalue(), f"Escala_{nome_mes_sel}.png")
         
         with c3:
